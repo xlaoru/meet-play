@@ -3,17 +3,26 @@
 
 import {
   APIProvider,
+  AdvancedMarker,
+  InfoWindow,
   Map,
 } from "@vis.gl/react-google-maps";
+import axios from "axios";
 import {
   CalendarDays,
   Clock,
+  Flag,
   Plus,
   Users,
   Wallet,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,258 +35,664 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 
-import {
-  EMPTY_EVENT_FORM,
-  EMPTY_LOCATION_FORM,
-  MAP_DEFAULT_CENTER,
-  MAP_DEFAULT_ZOOM,
-  MAP_ID,
-  SPORT_LABELS,
-  USER_STORAGE_KEY,
-} from "./constants";
-import { MapMarkers } from "./MapMarkers";
-import {
-  INITIAL_EVENTS,
-  INITIAL_LOCATIONS,
-  MOCK_USERS,
-} from "./mock-data";
-import type {
-  EventFormData,
-  FieldChange,
-  LocationFormData,
-  PanelMode,
-  SportEvent,
-  SportLocation,
-  SportType,
-  UserProfile,
-} from "./types";
-import {
-  formatDate,
-  formatTime,
-  getNextId,
-  isFutureDateTime,
-  normalizeCoordinates,
-  sortEvents,
-  toLocalDateTime,
-} from "./utils";
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+
+const MAP_ID =
+  process.env.NEXT_PUBLIC_GOOGLE_MAP_ID ?? "DEMO_MAP_ID";
+
+const DEFAULT_CENTER = {
+  lat: 48.4647,
+  lng: 35.0462,
+};
+
+type User = {
+  id: string;
+  name: string;
+  age: number;
+  telegramUsername: string;
+};
+
+type SportLocation = {
+  id: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  openingTime: string;
+  closingTime: string;
+  entryFee: number;
+  contactInfo: string;
+  sportType: string;
+  creatorId?: string;
+};
+
+type SportEvent = {
+  id: string;
+  title: string;
+  note: string;
+  sportType: string;
+  startsAt: string;
+  endsAt: string;
+  maxParticipants: number;
+  participantsCount: number;
+  locationId: string;
+  locationName: string;
+  organizerName: string;
+  organizerTelegramUsername: string;
+};
+
+type LocationForm = {
+  name: string;
+  address: string;
+  latitude: string;
+  longitude: string;
+  openingTime: string;
+  closingTime: string;
+  entryFee: string;
+  contactInfo: string;
+  sportType: string;
+};
+
+type EventForm = {
+  title: string;
+  note: string;
+  sportType: string;
+  startsAt: string;
+  endsAt: string;
+  maxParticipants: string;
+};
+
+type UserForm = {
+  name: string;
+  age: string;
+  telegramUsername: string;
+};
+
+const EMPTY_LOCATION_FORM: LocationForm = {
+  name: "",
+  address: "",
+  latitude: String(DEFAULT_CENTER.lat),
+  longitude: String(DEFAULT_CENTER.lng),
+  openingTime: "08:00",
+  closingTime: "22:00",
+  entryFee: "0",
+  contactInfo: "",
+  sportType: "FOOTBALL",
+};
+
+const EMPTY_EVENT_FORM: EventForm = {
+  title: "",
+  note: "",
+  sportType: "FOOTBALL",
+  startsAt: "",
+  endsAt: "",
+  maxParticipants: "10",
+};
+
+const EMPTY_USER_FORM: UserForm = {
+  name: "",
+  age: "18",
+  telegramUsername: "",
+};
+
+const SPORTS = [
+  { value: "FOOTBALL", label: "Футбол" },
+  { value: "BASKETBALL", label: "Баскетбол" },
+  { value: "VOLLEYBALL", label: "Волейбол" },
+  { value: "TENNIS", label: "Теніс" },
+  { value: "RUNNING", label: "Біг" },
+  { value: "OTHER", label: "Інше" },
+];
+
+const inputClassName =
+  "w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+function getErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const message = error.response?.data?.message;
+
+    if (typeof message === "string") {
+      return message;
+    }
+
+    return error.message || "Не вдалося виконати запит до сервера.";
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Сталася невідома помилка.";
+}
+
+function isValidCoordinate(
+  latitude: unknown,
+  longitude: unknown,
+): latitude is number {
+  return (
+    typeof latitude === "number" &&
+    Number.isFinite(latitude) &&
+    typeof longitude === "number" &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
+function parseCoordinate(value: string): number | null {
+  if (!value.trim()) {
+    return null;
+  }
+
+  const result = Number(value);
+
+  return Number.isFinite(result) ? result : null;
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) {
+    return "Дату не вказано";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Дату не вказано";
+  }
+
+  return new Intl.DateTimeFormat("uk-UA", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
+function formatTime(value: string | null | undefined): string {
+  if (!value) {
+    return "--:--";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "--:--";
+  }
+
+  return new Intl.DateTimeFormat("uk-UA", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function toLocalDateTimeInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function getInitialEventTimes() {
+  const start = new Date();
+
+  start.setHours(start.getHours() + 1);
+  start.setMinutes(0, 0, 0);
+
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+  return {
+    startsAt: toLocalDateTimeInput(start),
+    endsAt: toLocalDateTimeInput(end),
+  };
+}
+
+function getSportLabel(value: string): string {
+  return SPORTS.find((sport) => sport.value === value)?.label ?? value;
+}
 
 export default function EventsMap() {
-  const [locations, setLocations] =
-    useState<SportLocation[]>(INITIAL_LOCATIONS);
+  const [locations, setLocations] = useState<SportLocation[]>([]);
+  const [events, setEvents] = useState<SportEvent[]>([]);
 
-  const [events, setEvents] =
-    useState<SportEvent[]>(INITIAL_EVENTS);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-  const [users] = useState<UserProfile[]>(MOCK_USERS);
-
-  const [currentUser, setCurrentUser] =
-    useState<UserProfile | null>(null);
-
-  const [isInitializing, setIsInitializing] = useState(true);
-
-  const [selectedLocationId, setSelectedLocationId] =
-    useState<number | null>(null);
-
-  const [newCoordinates, setNewCoordinates] = useState<{
-    latitude: number;
-    longitude: number;
-  } | null>(null);
+  const [selectedLocationId, setSelectedLocationId] = useState<
+    string | null
+  >(null);
 
   const [locationForm, setLocationForm] =
-    useState<LocationFormData>(EMPTY_LOCATION_FORM);
+    useState<LocationForm>(EMPTY_LOCATION_FORM);
 
   const [eventForm, setEventForm] =
-    useState<EventFormData>(EMPTY_EVENT_FORM);
+    useState<EventForm>(EMPTY_EVENT_FORM);
 
-  const [panelMode, setPanelMode] = useState<PanelMode>(null);
+  const [userForm, setUserForm] =
+    useState<UserForm>(EMPTY_USER_FORM);
 
-  const [errorMessage, setErrorMessage] =
-    useState<string | null>(null);
+  const [isCreatingLocation, setIsCreatingLocation] = useState(false);
+  const [isCreatingEvent, setIsCreatingEvent] = useState(false);
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
 
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      try {
-        const savedUserId = localStorage.getItem(USER_STORAGE_KEY);
+  const [isLoadingLocations, setIsLoadingLocations] = useState(true);
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-        let user = savedUserId
-          ? MOCK_USERS.find(
-            (item) => item.id === Number(savedUserId),
-          )
-          : undefined;
-
-        if (!user) {
-          user = {
-            id: getNextId(MOCK_USERS),
-            name: "Гість",
-            age: 20,
-            telegramUsername: "",
-            createdAt: new Date().toISOString(),
-          };
-
-          localStorage.setItem(USER_STORAGE_KEY, String(user.id));
-        }
-
-        setCurrentUser(user);
-      } catch {
-        setErrorMessage(
-          "Не вдалося ініціалізувати профіль. Перевірте налаштування браузера.",
-        );
-      } finally {
-        setIsInitializing(false);
-      }
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, []);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   const selectedLocation =
-    locations.find(({ id }) => id === selectedLocationId) ?? null;
+    locations.find((location) => location.id === selectedLocationId) ??
+    null;
 
-  const locationEvents = selectedLocation
-    ? sortEvents(
-      events.filter(
-        ({ locationId }) => locationId === selectedLocation.id,
-      ),
-    )
-    : [];
+  const locationEvents = events
+    .filter((event) => event.locationId === selectedLocationId)
+    .sort((a, b) => {
+      const first = new Date(a.startsAt).getTime();
+      const second = new Date(b.startsAt).getTime();
 
-  const updateLocationField: FieldChange<LocationFormData> = (
-    field,
-    value,
-  ) => {
-    setLocationForm((previous) => ({
-      ...previous,
-      [field]: value,
-    }));
-  };
+      if (!Number.isFinite(first)) return 1;
+      if (!Number.isFinite(second)) return -1;
 
-  const updateEventField: FieldChange<EventFormData> = (
-    field,
-    value,
-  ) => {
-    setEventForm((previous) => ({
-      ...previous,
-      [field]: value,
-    }));
-  };
+      return first - second;
+    });
 
-  const closePanel = () => {
+  const loadLocations = useCallback(async () => {
+    setIsLoadingLocations(true);
+
+    try {
+      const response = await axios.get<SportLocation[]>(
+        `${API_URL}/api/locations`,
+      );
+
+      const data = Array.isArray(response.data)
+        ? response.data.filter((location) =>
+          isValidCoordinate(
+            location.latitude,
+            location.longitude,
+          ),
+        )
+        : [];
+
+      startTransition(() => {
+        setLocations(data);
+        setError("");
+      });
+    } catch (requestError) {
+      startTransition(() => {
+        setError(getErrorMessage(requestError));
+      });
+    } finally {
+      startTransition(() => {
+        setIsLoadingLocations(false);
+      });
+    }
+  }, []);
+
+  const loadLocationEvents = useCallback(
+    async (locationId: string) => {
+      setIsLoadingEvents(true);
+
+      try {
+        const response = await axios.get<SportEvent[]>(
+          `${API_URL}/api/locations/${locationId}/events`,
+        );
+
+        const data = Array.isArray(response.data)
+          ? response.data.map((event) => ({
+            ...event,
+            locationId: event.locationId || locationId,
+            participantsCount:
+              Number(event.participantsCount) || 0,
+            maxParticipants:
+              Number(event.maxParticipants) || 0,
+          }))
+          : [];
+
+        startTransition(() => {
+          setEvents((previous) => [
+            ...previous.filter(
+              (event) => event.locationId !== locationId,
+            ),
+            ...data,
+          ]);
+          setError("");
+        });
+      } catch (requestError) {
+        startTransition(() => {
+          setError(getErrorMessage(requestError));
+        });
+      } finally {
+        startTransition(() => {
+          setIsLoadingEvents(false);
+        });
+      }
+    },
+    [],
+  );
+
+  // Асинхронная загрузка данных после первого отображения.
+  useEffect(() => {
+    let active = true;
+
+    const run = async () => {
+      try {
+        const response = await axios.get<SportLocation[]>(
+          `${API_URL}/api/locations`,
+        );
+
+        if (!active) return;
+
+        const data = Array.isArray(response.data)
+          ? response.data.filter((location) =>
+            isValidCoordinate(
+              location.latitude,
+              location.longitude,
+            ),
+          )
+          : [];
+
+        startTransition(() => {
+          setLocations(data);
+          setError("");
+          setIsLoadingLocations(false);
+        });
+      } catch (requestError) {
+        if (!active) return;
+
+        startTransition(() => {
+          setError(getErrorMessage(requestError));
+          setIsLoadingLocations(false);
+        });
+      }
+    };
+
+    void run();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Восстанавливаем ID профиля из localStorage.
+  useEffect(() => {
+    let active = true;
+
+    const restoreUser = async () => {
+      let storedUserId: string | null = null;
+
+      try {
+        storedUserId = localStorage.getItem("userId");
+      } catch {
+        return;
+      }
+
+      if (!active || !storedUserId) return;
+
+      startTransition(() => {
+        setCurrentUser({
+          id: storedUserId as string,
+          name: "Ваш профіль",
+          age: 18,
+          telegramUsername: "",
+        });
+      });
+    };
+
+    void restoreUser();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Загружаем события, когда пользователь выбрал площадку.
+  useEffect(() => {
+    if (!selectedLocationId) return;
+
+    let active = true;
+    const locationId = selectedLocationId;
+
+    const run = async () => {
+      startTransition(() => {
+        setIsLoadingEvents(true);
+      });
+
+      try {
+        const response = await axios.get<SportEvent[]>(
+          `${API_URL}/api/locations/${locationId}/events`,
+        );
+
+        if (!active) return;
+
+        const data = Array.isArray(response.data)
+          ? response.data.map((event) => ({
+            ...event,
+            locationId: event.locationId || locationId,
+            participantsCount:
+              Number(event.participantsCount) || 0,
+            maxParticipants:
+              Number(event.maxParticipants) || 0,
+          }))
+          : [];
+
+        startTransition(() => {
+          setEvents((previous) => [
+            ...previous.filter(
+              (event) => event.locationId !== locationId,
+            ),
+            ...data,
+          ]);
+          setError("");
+          setIsLoadingEvents(false);
+        });
+      } catch (requestError) {
+        if (!active) return;
+
+        startTransition(() => {
+          setError(getErrorMessage(requestError));
+          setIsLoadingEvents(false);
+        });
+      }
+    };
+
+    void run();
+
+    return () => {
+      active = false;
+    };
+  }, [selectedLocationId]);
+
+  const closePanels = () => {
     setSelectedLocationId(null);
-    setNewCoordinates(null);
-    setPanelMode(null);
-    setErrorMessage(null);
+    setIsCreatingLocation(false);
+    setIsCreatingEvent(false);
+    setIsCreatingUser(false);
+    setError("");
+    setNotice("");
   };
 
-  const handleMapClick = (
-    latitude: number,
-    longitude: number,
-  ) => {
-    const coordinates = normalizeCoordinates(latitude, longitude);
+  const handleMapClick = (event: {
+    detail: {
+      latLng: { lat: number; lng: number } | null;
+    };
+  }) => {
+    const coordinates = event.detail.latLng;
 
-    if (!coordinates) {
-      setErrorMessage("Не вдалося визначити координати на карті.");
+    if (!coordinates) return;
+
+    setSelectedLocationId(null);
+    setIsCreatingEvent(false);
+    setIsCreatingUser(false);
+    setError("");
+    setNotice("");
+
+    setLocationForm({
+      ...EMPTY_LOCATION_FORM,
+      latitude: String(coordinates.lat),
+      longitude: String(coordinates.lng),
+    });
+
+    setIsCreatingLocation(true);
+  };
+
+  const handleOpenCreateLocation = () => {
+    setLocationForm({
+      ...EMPTY_LOCATION_FORM,
+      latitude: String(DEFAULT_CENTER.lat),
+      longitude: String(DEFAULT_CENTER.lng),
+    });
+
+    setSelectedLocationId(null);
+    setIsCreatingEvent(false);
+    setIsCreatingUser(false);
+    setIsCreatingLocation(true);
+    setError("");
+    setNotice("");
+  };
+
+  const handleSaveLocation = async () => {
+    if (!currentUser) {
+      setError("Спочатку створіть профіль користувача.");
+      setIsCreatingUser(true);
       return;
     }
 
-    setSelectedLocationId(null);
-    setNewCoordinates(coordinates);
-    setLocationForm({ ...EMPTY_LOCATION_FORM });
-    setEventForm({ ...EMPTY_EVENT_FORM });
-    setErrorMessage(null);
-    setPanelMode("create-location");
-  };
-
-  const handleSelectLocation = (location: SportLocation) => {
-    setSelectedLocationId(location.id);
-    setNewCoordinates(null);
-    setErrorMessage(null);
-    setPanelMode("details");
-  };
-
-  const handleSaveLocation = () => {
-    if (!currentUser || !newCoordinates) return;
-
-    const coordinates = normalizeCoordinates(
-      newCoordinates.latitude,
-      newCoordinates.longitude,
-    );
-
-    if (!coordinates) {
-      setErrorMessage("Координати майданчика некоректні.");
-      return;
-    }
-
-    const name = locationForm.name.trim();
+    const latitude = parseCoordinate(locationForm.latitude);
+    const longitude = parseCoordinate(locationForm.longitude);
     const entryFee = Number(locationForm.entryFee);
 
-    if (!name) {
-      setErrorMessage("Вкажіть назву майданчика.");
-      return;
-    }
-
-    if (!Number.isFinite(entryFee) || entryFee < 0) {
-      setErrorMessage("Вартість має бути невід'ємним числом.");
+    if (!locationForm.name.trim()) {
+      setError("Вкажіть назву спортивного майданчика.");
       return;
     }
 
     if (
-      !locationForm.openingTime ||
-      !locationForm.closingTime ||
-      locationForm.openingTime >= locationForm.closingTime
+      latitude === null ||
+      longitude === null ||
+      !isValidCoordinate(latitude, longitude)
     ) {
-      setErrorMessage("Перевірте години роботи майданчика.");
+      setError("Вкажіть коректні координати майданчика.");
       return;
     }
 
-    const newLocation: SportLocation = {
-      id: getNextId(locations),
-      name,
-      address: locationForm.address.trim(),
-      latitude: coordinates.latitude,
-      longitude: coordinates.longitude,
-      openingTime: `${locationForm.openingTime}:00`,
-      closingTime: `${locationForm.closingTime}:00`,
-      entryFee,
-      contactInfo: locationForm.contactInfo.trim() || null,
-      creatorId: currentUser.id,
-      sportType: locationForm.sportType,
-    };
+    if (!Number.isFinite(entryFee) || entryFee < 0) {
+      setError("Вартість відвідування не може бути від’ємною.");
+      return;
+    }
 
-    setLocations((previous) => [...previous, newLocation]);
-    setSelectedLocationId(newLocation.id);
-    setNewCoordinates(null);
-    setPanelMode("details");
-    setErrorMessage(null);
+    setIsSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const payload = {
+        name: locationForm.name.trim(),
+        address: locationForm.address.trim(),
+        latitude,
+        longitude,
+        openingTime: locationForm.openingTime,
+        closingTime: locationForm.closingTime,
+        entryFee,
+        contactInfo: locationForm.contactInfo.trim(),
+        creatorId: currentUser.id,
+        sportType: locationForm.sportType,
+      };
+
+      const response = await axios.post<SportLocation>(
+        `${API_URL}/api/locations`,
+        payload,
+      );
+
+      const createdLocation = response.data;
+
+      if (
+        createdLocation?.id &&
+        isValidCoordinate(
+          createdLocation.latitude,
+          createdLocation.longitude,
+        )
+      ) {
+        setLocations((previous) => [
+          ...previous,
+          createdLocation,
+        ]);
+        setSelectedLocationId(createdLocation.id);
+      } else {
+        await loadLocations();
+      }
+
+      setIsCreatingLocation(false);
+      setNotice("Спортивний майданчик створено.");
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const openCreateEvent = () => {
+  const handleOpenCreateEvent = () => {
+    if (!currentUser) {
+      setError("Спочатку створіть профіль користувача.");
+      setIsCreatingUser(true);
+      return;
+    }
+
+    const times = getInitialEventTimes();
+
     setEventForm({
       ...EMPTY_EVENT_FORM,
-      sportType: selectedLocation?.sportType ?? "FOOTBALL",
+      ...times,
+      sportType: selectedLocation?.sportType || "FOOTBALL",
     });
 
-    setErrorMessage(null);
-    setPanelMode("create-event");
+    setIsCreatingEvent(true);
+    setError("");
+    setNotice("");
   };
 
-  const handleSaveEvent = () => {
-    if (!currentUser || !selectedLocation) return;
+  const handleSaveEvent = async () => {
+    if (!selectedLocation) {
+      setError("Спочатку виберіть спортивний майданчик.");
+      return;
+    }
 
-    const title = eventForm.title.trim();
+    if (!currentUser) {
+      setError("Спочатку створіть профіль користувача.");
+      setIsCreatingUser(true);
+      return;
+    }
+
+    if (!eventForm.title.trim()) {
+      setError("Вкажіть назву події.");
+      return;
+    }
+
+    if (!eventForm.startsAt || !eventForm.endsAt) {
+      setError("Вкажіть дату та час початку й завершення.");
+      return;
+    }
+
+    const startsAt = new Date(eventForm.startsAt);
+    const endsAt = new Date(eventForm.endsAt);
     const maxParticipants = Number(eventForm.maxParticipants);
 
-    if (!title || !eventForm.date) {
-      setErrorMessage("Вкажіть назву гри та дату.");
+    if (
+      Number.isNaN(startsAt.getTime()) ||
+      Number.isNaN(endsAt.getTime())
+    ) {
+      setError("Вкажіть коректну дату та час.");
+      return;
+    }
+
+    if (endsAt <= startsAt) {
+      setError("Час завершення має бути пізніше часу початку.");
       return;
     }
 
@@ -285,175 +700,334 @@ export default function EventsMap() {
       !Number.isInteger(maxParticipants) ||
       maxParticipants < 1
     ) {
-      setErrorMessage(
-        "Кількість учасників має бути цілим числом від 1.",
-      );
+      setError("Кількість учасників має бути щонайменше 1.");
       return;
     }
 
-    if (!eventForm.startTime || !eventForm.endTime) {
-      setErrorMessage("Вкажіть час початку та завершення гри.");
-      return;
+    setIsSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      await axios.post(`${API_URL}/api/events`, {
+        title: eventForm.title.trim(),
+        note: eventForm.note.trim(),
+        sportType: eventForm.sportType,
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+        maxParticipants,
+        locationId: selectedLocation.id,
+        organizerId: currentUser.id,
+      });
+
+      setIsCreatingEvent(false);
+
+      await loadLocationEvents(selectedLocation.id);
+
+      setNotice("Подію створено.");
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsSaving(false);
     }
-
-    const startsAt = toLocalDateTime(
-      eventForm.date,
-      eventForm.startTime,
-    );
-
-    const endsAt = toLocalDateTime(
-      eventForm.date,
-      eventForm.endTime,
-    );
-
-    const startTimestamp = new Date(startsAt).getTime();
-    const endTimestamp = new Date(endsAt).getTime();
-
-    if (
-      !Number.isFinite(startTimestamp) ||
-      !Number.isFinite(endTimestamp)
-    ) {
-      setErrorMessage("Перевірте дату та час гри.");
-      return;
-    }
-
-    if (!isFutureDateTime(startsAt)) {
-      setErrorMessage("Початок гри має бути в майбутньому.");
-      return;
-    }
-
-    if (endTimestamp <= startTimestamp) {
-      setErrorMessage("Завершення має бути пізніше за початок.");
-      return;
-    }
-
-    const newEvent: SportEvent = {
-      id: getNextId(events),
-      title,
-      note: eventForm.note.trim(),
-      sportType: eventForm.sportType,
-      startsAt,
-      endsAt,
-      maxParticipants,
-      locationId: selectedLocation.id,
-      organizerId: currentUser.id,
-      participantIds: [currentUser.id],
-    };
-
-    setEvents((previous) => [...previous, newEvent]);
-    setPanelMode("details");
-    setErrorMessage(null);
   };
 
-  const handleToggleParticipation = (event: SportEvent) => {
-    if (!currentUser) return;
+  const handleCreateUser = async () => {
+    const age = Number(userForm.age);
 
-    const isOrganizer = event.organizerId === currentUser.id;
-    const isParticipating = event.participantIds.includes(
-      currentUser.id,
-    );
-
-    if (isOrganizer) {
-      setErrorMessage("Організатор не може вийти з власної гри.");
+    if (!userForm.name.trim()) {
+      setError("Вкажіть своє ім’я.");
       return;
     }
 
-    if (
-      !isParticipating &&
-      event.participantIds.length >= event.maxParticipants
-    ) {
-      setErrorMessage(
-        "Вільні місця закінчилися. Виберіть іншу подію.",
+    if (!Number.isInteger(age) || age < 1 || age > 120) {
+      setError("Вкажіть коректний вік.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError("");
+
+    try {
+      const response = await axios.post<User>(
+        `${API_URL}/api/users`,
+        {
+          name: userForm.name.trim(),
+          age,
+          telegramUsername: userForm.telegramUsername.trim(),
+        },
       );
-      return;
+
+      const user = response.data;
+
+      if (!user?.id) {
+        throw new Error("Сервер не повернув ID користувача.");
+      }
+
+      localStorage.setItem("userId", user.id);
+      setCurrentUser(user);
+      setIsCreatingUser(false);
+      setUserForm(EMPTY_USER_FORM);
+      setNotice("Профіль створено.");
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsSaving(false);
     }
-
-    setErrorMessage(null);
-
-    setEvents((previous) =>
-      previous.map((item) => {
-        if (item.id !== event.id) return item;
-
-        if (item.participantIds.includes(currentUser.id)) {
-          return {
-            ...item,
-            participantIds: item.participantIds.filter(
-              (id) => id !== currentUser.id,
-            ),
-          };
-        }
-
-        if (
-          item.participantIds.length >= item.maxParticipants
-        ) {
-          return item;
-        }
-
-        return {
-          ...item,
-          participantIds: [
-            ...item.participantIds,
-            currentUser.id,
-          ],
-        };
-      }),
-    );
   };
 
-  if (isInitializing) {
-    return (
-      <div className="flex h-[700px] items-center justify-center rounded-xl border">
-        Завантаження профілю...
-      </div>
-    );
-  }
+  const handleJoinEvent = async (event: SportEvent) => {
+    if (!currentUser) {
+      setError("Спочатку створіть профіль користувача.");
+      setIsCreatingUser(true);
+      return;
+    }
+
+    if (event.participantsCount >= event.maxParticipants) {
+      setError("У цій події вже немає вільних місць.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      await axios.post(
+        `${API_URL}/api/events/${event.id}/participants`,
+        { userId: currentUser.id },
+      );
+
+      await loadLocationEvents(event.locationId);
+      setNotice("Ви приєдналися до події.");
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleLeaveEvent = async (event: SportEvent) => {
+    if (!currentUser) {
+      setError("Спочатку створіть профіль користувача.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      await axios.delete(
+        `${API_URL}/api/events/${event.id}/participants/${currentUser.id}`,
+      );
+
+      await loadLocationEvents(event.locationId);
+      setNotice("Ви залишили подію.");
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <APIProvider
       apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? ""}
     >
-      <div className="relative h-[700px] w-full overflow-hidden rounded-xl border">
+      <div className="relative h-[700px] min-h-[500px] w-full overflow-hidden rounded-xl border">
         <Map
           mapId={MAP_ID}
-          defaultCenter={MAP_DEFAULT_CENTER}
-          defaultZoom={MAP_DEFAULT_ZOOM}
+          defaultCenter={DEFAULT_CENTER}
+          defaultZoom={13}
           gestureHandling="greedy"
-          onClick={(event) => {
-            const coordinates = event.detail.latLng;
-
-            if (coordinates) {
-              handleMapClick(
-                coordinates.lat,
-                coordinates.lng,
-              );
-            }
-          }}
           className="h-full w-full"
+          onClick={handleMapClick}
         >
-          <MapMarkers
-            locations={locations}
-            newCoordinates={newCoordinates}
-            onSelectLocation={handleSelectLocation}
-          />
+          {locations.map((location) => {
+            if (
+              !isValidCoordinate(
+                location.latitude,
+                location.longitude,
+              )
+            ) {
+              return null;
+            }
+
+            return (
+              <AdvancedMarker
+                key={location.id}
+                position={{
+                  lat: location.latitude,
+                  lng: location.longitude,
+                }}
+                title={location.name}
+                onClick={() => {
+                  setSelectedLocationId(location.id);
+                  setIsCreatingLocation(false);
+                  setIsCreatingEvent(false);
+                  setIsCreatingUser(false);
+                  setError("");
+                  setNotice("");
+                }}
+              >
+                <div className="flex flex-col items-center gap-1">
+                  <div className="flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md ring-2 ring-background">
+                    <Flag className="size-5" />
+                  </div>
+
+                  <div className="whitespace-nowrap rounded-md border bg-background px-2 py-1 text-xs font-medium shadow-sm">
+                    {location.name}
+                  </div>
+                </div>
+              </AdvancedMarker>
+            );
+          })}
+
+          {selectedLocation &&
+            isValidCoordinate(
+              selectedLocation.latitude,
+              selectedLocation.longitude,
+            ) && (
+              <InfoWindow
+                position={{
+                  lat: selectedLocation.latitude,
+                  lng: selectedLocation.longitude,
+                }}
+                onCloseClick={closePanels}
+                minWidth={260}
+              >
+                <div className="space-y-2 p-1 text-foreground">
+                  <h3 className="text-base font-semibold">
+                    {selectedLocation.name}
+                  </h3>
+
+                  <p className="text-sm text-muted-foreground">
+                    {selectedLocation.address || "Адресу не вказано"}
+                  </p>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="secondary">
+                      <Clock className="mr-1 size-3" />
+                      {selectedLocation.openingTime || "--:--"}–
+                      {selectedLocation.closingTime || "--:--"}
+                    </Badge>
+
+                    <Badge variant="secondary">
+                      <Wallet className="mr-1 size-3" />
+                      {Number(selectedLocation.entryFee) === 0
+                        ? "Безкоштовно"
+                        : `${selectedLocation.entryFee} грн`}
+                    </Badge>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    {getSportLabel(selectedLocation.sportType)}
+                  </p>
+
+                  <Button
+                    className="w-full"
+                    size="sm"
+                    onClick={() => {
+                      setIsCreatingEvent(false);
+                      setError("");
+                      setNotice("");
+                    }}
+                  >
+                    <CalendarDays className="mr-2 size-4" />
+                    Переглянути події
+                  </Button>
+                </div>
+              </InfoWindow>
+            )}
         </Map>
 
-        {panelMode === "create-location" && newCoordinates && (
-          <Card className="absolute inset-x-3 bottom-3 z-20 max-h-[90%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[380px]">
+        {!selectedLocation &&
+          !isCreatingLocation &&
+          !isCreatingUser && (
+            <Card className="absolute left-3 top-3 z-10 max-w-xs">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">
+                  Спортивні майданчики
+                </CardTitle>
+                <CardDescription>
+                  Виберіть майданчик на карті або створіть новий.
+                </CardDescription>
+              </CardHeader>
+
+              <CardContent className="space-y-3">
+                <Button
+                  className="w-full"
+                  onClick={handleOpenCreateLocation}
+                >
+                  <Plus className="mr-2 size-4" />
+                  Створити майданчик
+                </Button>
+
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    setIsCreatingUser(true);
+                    setError("");
+                    setNotice("");
+                  }}
+                >
+                  {currentUser ? "Змінити профіль" : "Створити профіль"}
+                </Button>
+
+                {isLoadingLocations && (
+                  <p className="text-sm text-muted-foreground">
+                    Завантаження майданчиків...
+                  </p>
+                )}
+
+                {!isLoadingLocations && locations.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    Майданчиків поки немає.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+        {(error || notice) && (
+          <div className="absolute left-3 right-3 top-3 z-40 sm:left-1/2 sm:right-auto sm:w-[420px] sm:-translate-x-1/2">
+            <div
+              className={`rounded-lg border bg-background p-3 text-sm shadow-lg ${error ? "border-destructive text-destructive" : ""
+                }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <p>{error || notice}</p>
+                <button
+                  type="button"
+                  aria-label="Закрити повідомлення"
+                  onClick={() => {
+                    setError("");
+                    setNotice("");
+                  }}
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isCreatingLocation && (
+          <Card className="absolute inset-x-3 bottom-3 z-20 max-h-[85%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[380px]">
             <CardHeader>
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <CardTitle>
-                    Нова спортивна локація
-                  </CardTitle>
+                  <CardTitle>Новий майданчик</CardTitle>
                   <CardDescription>
-                    Координати вибрано на карті.
+                    Інформація про спортивну локацію.
                   </CardDescription>
                 </div>
-
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={closePanel}
+                  onClick={closePanels}
                   aria-label="Закрити"
                 >
                   <X className="size-4" />
@@ -462,29 +1036,124 @@ export default function EventsMap() {
             </CardHeader>
 
             <CardContent className="space-y-4">
-              <LocationFields
-                form={locationForm}
-                onChange={updateLocationField}
-              />
+              <div className="space-y-1.5">
+                <Label>Назва *</Label>
+                <Input
+                  value={locationForm.name}
+                  onChange={(event) =>
+                    setLocationForm((form) => ({
+                      ...form,
+                      name: event.target.value,
+                    }))
+                  }
+                  placeholder="Футбольний майданчик"
+                />
+              </div>
 
-              {errorMessage && (
-                <p role="alert" className="text-sm text-destructive">
-                  {errorMessage}
-                </p>
-              )}
+              <div className="space-y-1.5">
+                <Label>Адреса</Label>
+                <Input
+                  value={locationForm.address}
+                  onChange={(event) =>
+                    setLocationForm((form) => ({
+                      ...form,
+                      address: event.target.value,
+                    }))
+                  }
+                  placeholder="Вулиця, парк, район"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Вид спорту</Label>
+                <select
+                  className={inputClassName}
+                  value={locationForm.sportType}
+                  onChange={(event) =>
+                    setLocationForm((form) => ({
+                      ...form,
+                      sportType: event.target.value,
+                    }))
+                  }
+                >
+                  {SPORTS.map((sport) => (
+                    <option key={sport.value} value={sport.value}>
+                      {sport.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Відкриття</Label>
+                  <Input
+                    type="time"
+                    value={locationForm.openingTime}
+                    onChange={(event) =>
+                      setLocationForm((form) => ({
+                        ...form,
+                        openingTime: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>Закриття</Label>
+                  <Input
+                    type="time"
+                    value={locationForm.closingTime}
+                    onChange={(event) =>
+                      setLocationForm((form) => ({
+                        ...form,
+                        closingTime: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Вартість відвідування, грн</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={locationForm.entryFee}
+                  onChange={(event) =>
+                    setLocationForm((form) => ({
+                      ...form,
+                      entryFee: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Контактна інформація</Label>
+                <Textarea
+                  value={locationForm.contactInfo}
+                  onChange={(event) =>
+                    setLocationForm((form) => ({
+                      ...form,
+                      contactInfo: event.target.value,
+                    }))
+                  }
+                  placeholder="Телефон або Telegram"
+                  rows={2}
+                />
+              </div>
 
               <div className="flex gap-2">
                 <Button
                   className="flex-1"
                   onClick={handleSaveLocation}
-                  disabled={
-                    !locationForm.name.trim() || !currentUser
-                  }
+                  disabled={isSaving || !locationForm.name.trim()}
                 >
-                  Створити майданчик
+                  {isSaving ? "Збереження..." : "Створити майданчик"}
                 </Button>
 
-                <Button variant="outline" onClick={closePanel}>
+                <Button variant="outline" onClick={closePanels}>
                   Скасувати
                 </Button>
               </div>
@@ -492,27 +1161,20 @@ export default function EventsMap() {
           </Card>
         )}
 
-        {selectedLocation && panelMode && (
-          <Card className="absolute inset-x-3 bottom-3 z-20 max-h-[90%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[420px]">
+        {isCreatingUser && (
+          <Card className="absolute inset-x-3 bottom-3 z-20 max-h-[85%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[380px]">
             <CardHeader>
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <CardTitle>
-                    {panelMode === "create-event"
-                      ? "Створити гру"
-                      : selectedLocation.name}
-                  </CardTitle>
-
+                  <CardTitle>Профіль користувача</CardTitle>
                   <CardDescription>
-                    {selectedLocation.address ||
-                      "Адресу не вказано"}
+                    Профіль потрібен для створення та відвідування подій.
                   </CardDescription>
                 </div>
-
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={closePanel}
+                  onClick={closePanels}
                   aria-label="Закрити"
                 >
                   <X className="size-4" />
@@ -521,445 +1183,352 @@ export default function EventsMap() {
             </CardHeader>
 
             <CardContent className="space-y-4">
-              {panelMode === "create-event" ? (
-                <EventFields
-                  form={eventForm}
-                  onChange={updateEventField}
-                  errorMessage={errorMessage}
-                  onSave={handleSaveEvent}
-                  onCancel={() => {
-                    setPanelMode("details");
-                    setErrorMessage(null);
-                  }}
+              <div className="space-y-1.5">
+                <Label>Ім’я *</Label>
+                <Input
+                  value={userForm.name}
+                  onChange={(event) =>
+                    setUserForm((form) => ({
+                      ...form,
+                      name: event.target.value,
+                    }))
+                  }
+                  placeholder="Ваше ім’я"
                 />
-              ) : (
-                <>
-                  <div className="space-y-2 text-sm">
-                    <p className="flex items-center gap-2">
-                      <Clock className="size-4 text-muted-foreground" />
-                      {formatTime(selectedLocation.openingTime)}–
-                      {formatTime(selectedLocation.closingTime)}
-                    </p>
+              </div>
 
-                    <p className="flex items-center gap-2">
-                      <Wallet className="size-4 text-muted-foreground" />
-                      {selectedLocation.entryFee === 0
-                        ? "Безкоштовно"
-                        : `${selectedLocation.entryFee} грн`}
-                    </p>
+              <div className="space-y-1.5">
+                <Label>Вік *</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={120}
+                  value={userForm.age}
+                  onChange={(event) =>
+                    setUserForm((form) => ({
+                      ...form,
+                      age: event.target.value,
+                    }))
+                  }
+                />
+              </div>
 
-                    <p>
-                      Вид спорту:{" "}
-                      {SPORT_LABELS[selectedLocation.sportType]}
-                    </p>
+              <div className="space-y-1.5">
+                <Label>Telegram username</Label>
+                <Input
+                  value={userForm.telegramUsername}
+                  onChange={(event) =>
+                    setUserForm((form) => ({
+                      ...form,
+                      telegramUsername: event.target.value,
+                    }))
+                  }
+                  placeholder="@username"
+                />
+              </div>
 
-                    {selectedLocation.contactInfo && (
-                      <p>
-                        Контакти: {selectedLocation.contactInfo}
-                      </p>
-                    )}
-                  </div>
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  onClick={handleCreateUser}
+                  disabled={isSaving}
+                >
+                  {isSaving ? "Збереження..." : "Зберегти профіль"}
+                </Button>
 
-                  <Separator />
+                <Button variant="outline" onClick={closePanels}>
+                  Скасувати
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="font-semibold">
-                        Заплановані ігри ({locationEvents.length})
-                      </h3>
+        {selectedLocation && (
+          <Card className="absolute inset-x-3 bottom-3 z-20 max-h-[75%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[420px]">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle>{selectedLocation.name}</CardTitle>
+                  <CardDescription>
+                    {selectedLocation.address || "Адресу не вказано"}
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={closePanels}
+                  aria-label="Закрити"
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+            </CardHeader>
 
-                      <Button
-                        size="sm"
-                        onClick={openCreateEvent}
-                      >
-                        <Plus className="mr-1 size-4" />
-                        Створити гру
-                      </Button>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="secondary">
+                  <Clock className="mr-1 size-3" />
+                  {selectedLocation.openingTime || "--:--"}–
+                  {selectedLocation.closingTime || "--:--"}
+                </Badge>
+
+                <Badge variant="secondary">
+                  <Wallet className="mr-1 size-3" />
+                  {Number(selectedLocation.entryFee) === 0
+                    ? "Безкоштовно"
+                    : `${selectedLocation.entryFee} грн`}
+                </Badge>
+
+                <Badge variant="secondary">
+                  {getSportLabel(selectedLocation.sportType)}
+                </Badge>
+              </div>
+
+              {selectedLocation.contactInfo && (
+                <p className="text-sm text-muted-foreground">
+                  Контакти: {selectedLocation.contactInfo}
+                </p>
+              )}
+
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-semibold">Події на майданчику</h3>
+
+                <Button
+                  size="sm"
+                  onClick={handleOpenCreateEvent}
+                  disabled={isSaving}
+                >
+                  <Plus className="mr-1 size-4" />
+                  Створити подію
+                </Button>
+              </div>
+
+              {isLoadingEvents && (
+                <p className="text-sm text-muted-foreground">
+                  Завантаження подій...
+                </p>
+              )}
+
+              {!isLoadingEvents && locationEvents.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  На цьому майданчику поки немає подій.
+                </p>
+              )}
+
+              <div className="space-y-3">
+                {locationEvents.map((event) => (
+                  <div
+                    key={event.id}
+                    className="space-y-3 rounded-lg border p-3"
+                  >
+                    <div>
+                      <h4 className="font-semibold">{event.title}</h4>
+
+                      {event.note && (
+                        <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
+                          {event.note}
+                        </p>
+                      )}
                     </div>
 
-                    {locationEvents.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        На цій локації ще немає запланованих ігор.
-                      </p>
-                    ) : (
-                      locationEvents.map((event) => (
-                        <EventCard
-                          key={event.id}
-                          event={event}
-                          users={users}
-                          currentUser={currentUser}
-                          onToggleParticipation={
-                            handleToggleParticipation
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="secondary">
+                        <CalendarDays className="mr-1 size-3" />
+                        {formatDate(event.startsAt)}
+                      </Badge>
+
+                      <Badge variant="secondary">
+                        <Clock className="mr-1 size-3" />
+                        {formatTime(event.startsAt)}–
+                        {formatTime(event.endsAt)}
+                      </Badge>
+
+                      <Badge variant="secondary">
+                        <Users className="mr-1 size-3" />
+                        {event.participantsCount}/{event.maxParticipants}
+                      </Badge>
+                    </div>
+
+                    <p className="text-sm text-muted-foreground">
+                      Спорт: {getSportLabel(event.sportType)}
+                    </p>
+
+                    <p className="text-sm text-muted-foreground">
+                      Організатор: {event.organizerName || "Невідомий"}
+                      {event.organizerTelegramUsername
+                        ? ` · @${event.organizerTelegramUsername.replace(/^@/, "")}`
+                        : ""}
+                    </p>
+
+                    {currentUser && (
+                      <div className="flex gap-2">
+                        <Button
+                          className="flex-1"
+                          variant="outline"
+                          onClick={() => handleJoinEvent(event)}
+                          disabled={
+                            isSaving ||
+                            event.participantsCount >=
+                            event.maxParticipants
                           }
-                        />
-                      ))
+                        >
+                          {event.participantsCount >=
+                            event.maxParticipants
+                            ? "Місць немає"
+                            : "Приєднатися"}
+                        </Button>
+
+                        <Button
+                          variant="outline"
+                          onClick={() => handleLeaveEvent(event)}
+                          disabled={isSaving}
+                        >
+                          Вийти
+                        </Button>
+                      </div>
                     )}
                   </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-                  {errorMessage && (
-                    <p role="alert" className="text-sm text-destructive">
-                      {errorMessage}
-                    </p>
-                  )}
+        {isCreatingEvent && selectedLocation && (
+          <Card className="absolute inset-x-3 bottom-3 z-30 max-h-[85%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:left-4 sm:right-auto sm:w-[380px]">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle>Створення події</CardTitle>
+                  <CardDescription>
+                    Майданчик: {selectedLocation.name}
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsCreatingEvent(false)}
+                  aria-label="Закрити"
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+            </CardHeader>
 
-                  <Separator />
+            <CardContent className="space-y-4">
+              <div className="space-y-1.5">
+                <Label>Назва події *</Label>
+                <Input
+                  value={eventForm.title}
+                  onChange={(event) =>
+                    setEventForm((form) => ({
+                      ...form,
+                      title: event.target.value,
+                    }))
+                  }
+                  placeholder="Наприклад, Гра у футбол"
+                />
+              </div>
 
-                  <p className="text-xs text-muted-foreground">
-                    Локація #{selectedLocation.id} · Ваш профіль:{" "}
-                    {currentUser?.name} (ID: {currentUser?.id})
-                  </p>
-                </>
-              )}
+              <div className="space-y-1.5">
+                <Label>Опис</Label>
+                <Textarea
+                  value={eventForm.note}
+                  onChange={(event) =>
+                    setEventForm((form) => ({
+                      ...form,
+                      note: event.target.value,
+                    }))
+                  }
+                  placeholder="Додаткова інформація про подію"
+                  rows={3}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Вид спорту</Label>
+                <select
+                  className={inputClassName}
+                  value={eventForm.sportType}
+                  onChange={(event) =>
+                    setEventForm((form) => ({
+                      ...form,
+                      sportType: event.target.value,
+                    }))
+                  }
+                >
+                  {SPORTS.map((sport) => (
+                    <option key={sport.value} value={sport.value}>
+                      {sport.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Початок *</Label>
+                <Input
+                  type="datetime-local"
+                  value={eventForm.startsAt}
+                  onChange={(event) =>
+                    setEventForm((form) => ({
+                      ...form,
+                      startsAt: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Завершення *</Label>
+                <Input
+                  type="datetime-local"
+                  value={eventForm.endsAt}
+                  onChange={(event) =>
+                    setEventForm((form) => ({
+                      ...form,
+                      endsAt: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Максимум учасників *</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={eventForm.maxParticipants}
+                  onChange={(event) =>
+                    setEventForm((form) => ({
+                      ...form,
+                      maxParticipants: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  onClick={handleSaveEvent}
+                  disabled={isSaving || !eventForm.title.trim()}
+                >
+                  {isSaving ? "Збереження..." : "Створити подію"}
+                </Button>
+
+                <Button
+                  variant="outline"
+                  onClick={() => setIsCreatingEvent(false)}
+                >
+                  Скасувати
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}
       </div>
     </APIProvider>
-  );
-}
-
-function LocationFields({
-  form,
-  onChange,
-}: {
-  form: LocationFormData;
-  onChange: FieldChange<LocationFormData>;
-}) {
-  return (
-    <>
-      <div className="space-y-1.5">
-        <Label>Назва майданчика *</Label>
-        <Input
-          value={form.name}
-          onChange={(event) =>
-            onChange("name", event.target.value)
-          }
-          placeholder="Наприклад, Баскетбольний майданчик"
-          maxLength={100}
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Адреса</Label>
-        <Input
-          value={form.address}
-          onChange={(event) =>
-            onChange("address", event.target.value)
-          }
-          placeholder="Вулиця, парк, район"
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Вид спорту</Label>
-        <SportSelect
-          value={form.sportType}
-          onChange={(value) => onChange("sportType", value)}
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label>Відкриття</Label>
-          <Input
-            type="time"
-            value={form.openingTime}
-            onChange={(event) =>
-              onChange("openingTime", event.target.value)
-            }
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>Закриття</Label>
-          <Input
-            type="time"
-            value={form.closingTime}
-            onChange={(event) =>
-              onChange("closingTime", event.target.value)
-            }
-          />
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Вартість відвідування (грн)</Label>
-        <Input
-          type="number"
-          min={0}
-          step="0.01"
-          value={form.entryFee}
-          onChange={(event) =>
-            onChange("entryFee", event.target.value)
-          }
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Контакти власника</Label>
-        <Input
-          value={form.contactInfo}
-          onChange={(event) =>
-            onChange("contactInfo", event.target.value)
-          }
-          placeholder="@telegram або номер телефону"
-        />
-      </div>
-    </>
-  );
-}
-
-function EventFields({
-  form,
-  onChange,
-  errorMessage,
-  onSave,
-  onCancel,
-}: {
-  form: EventFormData;
-  onChange: FieldChange<EventFormData>;
-  errorMessage: string | null;
-  onSave: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <div className="space-y-3">
-      <div className="space-y-1.5">
-        <Label>Назва гри *</Label>
-        <Input
-          value={form.title}
-          onChange={(event) =>
-            onChange("title", event.target.value)
-          }
-          placeholder="Наприклад, Вечірній баскетбол"
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Примітка</Label>
-        <Textarea
-          value={form.note}
-          onChange={(event) =>
-            onChange("note", event.target.value)
-          }
-          placeholder="Візьміть воду та спортивне взуття"
-          rows={2}
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Вид спорту</Label>
-        <SportSelect
-          value={form.sportType}
-          onChange={(value) => onChange("sportType", value)}
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Дата гри *</Label>
-        <Input
-          type="date"
-          value={form.date}
-          onChange={(event) =>
-            onChange("date", event.target.value)
-          }
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label>Початок</Label>
-          <Input
-            type="time"
-            value={form.startTime}
-            onChange={(event) =>
-              onChange("startTime", event.target.value)
-            }
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>Завершення</Label>
-          <Input
-            type="time"
-            value={form.endTime}
-            onChange={(event) =>
-              onChange("endTime", event.target.value)
-            }
-          />
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Максимум учасників</Label>
-        <Input
-          type="number"
-          min={1}
-          step={1}
-          value={form.maxParticipants}
-          onChange={(event) =>
-            onChange("maxParticipants", event.target.value)
-          }
-        />
-      </div>
-
-      {errorMessage && (
-        <p role="alert" className="text-sm text-destructive">
-          {errorMessage}
-        </p>
-      )}
-
-      <div className="flex gap-2">
-        <Button
-          className="flex-1"
-          onClick={onSave}
-          disabled={
-            !form.title.trim() ||
-            !form.date ||
-            !Number.isInteger(Number(form.maxParticipants)) ||
-            Number(form.maxParticipants) < 1
-          }
-        >
-          Створити гру
-        </Button>
-
-        <Button variant="outline" onClick={onCancel}>
-          Скасувати
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function SportSelect({
-  value,
-  onChange,
-}: {
-  value: SportType;
-  onChange: (value: SportType) => void;
-}) {
-  return (
-    <Select
-      value={value}
-      onValueChange={(nextValue) => {
-        if (nextValue) onChange(nextValue as SportType);
-      }}
-    >
-      <SelectTrigger>
-        <SelectValue placeholder="Оберіть вид спорту" />
-      </SelectTrigger>
-
-      <SelectContent>
-        {Object.entries(SPORT_LABELS).map(([sport, label]) => (
-          <SelectItem key={sport} value={sport}>
-            {label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function EventCard({
-  event,
-  users,
-  currentUser,
-  onToggleParticipation,
-}: {
-  event: SportEvent;
-  users: UserProfile[];
-  currentUser: UserProfile | null;
-  onToggleParticipation: (event: SportEvent) => void;
-}) {
-  const participantsCount = event.participantIds.length;
-
-  const isParticipating =
-    currentUser !== null &&
-    event.participantIds.includes(currentUser.id);
-
-  const isOrganizer =
-    currentUser !== null &&
-    event.organizerId === currentUser.id;
-
-  const isFull = participantsCount >= event.maxParticipants;
-
-  const organizer =
-    users.find((user) => user.id === event.organizerId) ??
-    (currentUser?.id === event.organizerId
-      ? currentUser
-      : undefined);
-
-  const participantNames = event.participantIds.map(
-    (id) =>
-      users.find((user) => user.id === id)?.name ??
-      (currentUser?.id === id ? currentUser.name : "Учасник"),
-  );
-
-  return (
-    <div className="space-y-3 rounded-lg border p-3">
-      <div>
-        <h4 className="font-semibold">{event.title}</h4>
-
-        {event.note && (
-          <p className="mt-1 text-sm text-muted-foreground">
-            {event.note}
-          </p>
-        )}
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="secondary">
-          {SPORT_LABELS[event.sportType]}
-        </Badge>
-
-        <Badge variant="secondary">
-          <CalendarDays className="mr-1 size-3" />
-          {formatDate(event.startsAt)}
-        </Badge>
-
-        <Badge variant="secondary">
-          <Clock className="mr-1 size-3" />
-          {formatTime(event.startsAt)}–
-          {formatTime(event.endsAt)}
-        </Badge>
-
-        <Badge variant="secondary">
-          <Users className="mr-1 size-3" />
-          {participantsCount}/{event.maxParticipants}
-        </Badge>
-      </div>
-
-      <p className="text-sm text-muted-foreground">
-        Організатор: {organizer?.name ?? "Учасник"}
-        {organizer?.telegramUsername &&
-          ` (${organizer.telegramUsername})`}
-      </p>
-
-      <p className="text-sm text-muted-foreground">
-        Учасники:{" "}
-        {participantNames.length > 0
-          ? participantNames.join(", ")
-          : "Поки що немає"}
-      </p>
-
-      {isOrganizer ? (
-        <p className="text-sm text-muted-foreground">
-          Ви організатор цієї гри.
-        </p>
-      ) : (
-        <Button
-          className="w-full"
-          variant={isParticipating ? "outline" : "default"}
-          disabled={!isParticipating && isFull}
-          onClick={() => onToggleParticipation(event)}
-        >
-          {isParticipating
-            ? "Відмовитися від участі"
-            : isFull
-              ? "Місць немає"
-              : "Приєднатися до гри"}
-        </Button>
-      )}
-    </div>
   );
 }

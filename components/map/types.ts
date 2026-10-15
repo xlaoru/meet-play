@@ -18,7 +18,7 @@ export type SportLocation = {
   closingTime: string
   entryFee: number
   contactInfo: string | null
-  creatorId: number
+  creatorId?: number
   sportType: SportType
 }
 

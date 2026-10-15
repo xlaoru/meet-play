@@ -1,0 +1,100 @@
+import type { SportEvent, SportLocation, UserProfile } from './types'
+
+export const MOCK_USERS: UserProfile[] = [
+  {
+    id: 1,
+    name: 'Ілля',
+    age: 19,
+    telegramUsername: '@illia',
+    createdAt: '2026-10-14T12:00:00',
+  },
+  {
+    id: 2,
+    name: 'Ваня',
+    age: 20,
+    telegramUsername: '@vania',
+    createdAt: '2026-10-14T12:00:00',
+  },
+  {
+    id: 3,
+    name: 'Саша',
+    age: 20,
+    telegramUsername: '@sasha',
+    createdAt: '2026-10-14T12:00:00',
+  },
+  {
+    id: 4,
+    name: 'Демо-користувач',
+    age: 22,
+    telegramUsername: '@demo',
+    createdAt: '2026-10-14T12:00:00',
+  },
+]
+
+export const INITIAL_LOCATIONS: SportLocation[] = [
+  {
+    id: 1,
+    name: 'Резинка',
+    address: 'Парк Глоби, Дніпро',
+    latitude: 48.4647,
+    longitude: 35.0462,
+    openingTime: '08:00:00',
+    closingTime: '19:00:00',
+    entryFee: 0,
+    contactInfo: '@owner',
+    creatorId: 1,
+    sportType: 'OTHER',
+  },
+  {
+    id: 2,
+    name: 'Баскетбольний майданчик',
+    address: 'Центральний район, Дніпро',
+    latitude: 48.468,
+    longitude: 35.04,
+    openingTime: '08:00:00',
+    closingTime: '21:00:00',
+    entryFee: 100,
+    contactInfo: '@sports_admin',
+    creatorId: 4,
+    sportType: 'BASKETBALL',
+  },
+]
+
+export const INITIAL_EVENTS: SportEvent[] = [
+  {
+    id: 1,
+    title: 'Вечірній футбол',
+    note: "Візьміть футбольний м'яч",
+    sportType: 'FOOTBALL',
+    startsAt: '2026-10-16T18:00:00',
+    endsAt: '2026-10-16T19:30:00',
+    maxParticipants: 10,
+    locationId: 1,
+    organizerId: 1,
+    participantIds: [1, 2, 3],
+  },
+  {
+    id: 2,
+    title: 'Стрітбол',
+    note: 'Візьміть воду',
+    sportType: 'BASKETBALL',
+    startsAt: '2026-10-17T17:00:00',
+    endsAt: '2026-10-17T18:00:00',
+    maxParticipants: 6,
+    locationId: 1,
+    organizerId: 2,
+    participantIds: [2],
+  },
+  {
+    id: 3,
+    title: 'Баскетбол 3x3',
+    note: 'Шукаємо ще двох гравців',
+    sportType: 'BASKETBALL',
+    startsAt: '2026-10-18T16:00:00',
+    endsAt: '2026-10-18T17:30:00',
+    maxParticipants: 6,
+    locationId: 2,
+    organizerId: 4,
+    participantIds: [4, 2],
+  },
+]

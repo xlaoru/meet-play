@@ -1,10 +1,8 @@
-
 "use client";
 
 import {
   APIProvider,
   AdvancedMarker,
-  InfoWindow,
   Map,
 } from "@vis.gl/react-google-maps";
 import axios from "axios";
@@ -142,8 +140,13 @@ const SPORTS = [
   { value: "FOOTBALL", label: "Футбол" },
   { value: "BASKETBALL", label: "Баскетбол" },
   { value: "VOLLEYBALL", label: "Волейбол" },
-  { value: "TENNIS", label: "Теніс" },
-  { value: "RUNNING", label: "Біг" },
+  { value: "OTHER", label: "Інше" },
+];
+
+const EVENT_SPORTS = [
+  { value: "FOOTBALL", label: "Футбол" },
+  { value: "BASKETBALL", label: "Баскетбол" },
+  { value: "VOLLEYBALL", label: "Волейбол" },
   { value: "OTHER", label: "Інше" },
 ];
 
@@ -260,8 +263,8 @@ function getSportLabel(value: string): string {
 export default function EventsMap() {
   const [locations, setLocations] = useState<SportLocation[]>([]);
   const [events, setEvents] = useState<SportEvent[]>([]);
-
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [joinedEventIds, setJoinedEventIds] = useState<string[]>([]);
 
   const [selectedLocationId, setSelectedLocationId] = useState<
     string | null
@@ -344,23 +347,56 @@ export default function EventsMap() {
           `${API_URL}/api/locations/${locationId}/events`,
         );
 
-        const data = Array.isArray(response.data)
-          ? response.data.map((event) => ({
-            ...event,
-            locationId: event.locationId || locationId,
-            participantsCount:
-              Number(event.participantsCount) || 0,
-            maxParticipants:
-              Number(event.maxParticipants) || 0,
-          }))
+        const list = Array.isArray(response.data)
+          ? response.data
           : [];
+
+        const enrichedEvents = await Promise.all(
+          list.map(async (event) => {
+            try {
+              const detailResponse = await axios.get<SportEvent>(
+                `${API_URL}/api/events/${event.id}`,
+              );
+
+              const details = detailResponse.data;
+
+              return {
+                ...event,
+                ...details,
+                locationId:
+                  details.locationId ||
+                  event.locationId ||
+                  locationId,
+                participantsCount:
+                  Number(
+                    details.participantsCount ??
+                    event.participantsCount,
+                  ) || 0,
+                maxParticipants:
+                  Number(
+                    details.maxParticipants ??
+                    event.maxParticipants,
+                  ) || 0,
+              };
+            } catch {
+              return {
+                ...event,
+                locationId: event.locationId || locationId,
+                participantsCount:
+                  Number(event.participantsCount) || 0,
+                maxParticipants:
+                  Number(event.maxParticipants) || 0,
+              };
+            }
+          }),
+        );
 
         startTransition(() => {
           setEvents((previous) => [
             ...previous.filter(
               (event) => event.locationId !== locationId,
             ),
-            ...data,
+            ...enrichedEvents,
           ]);
           setError("");
         });
@@ -377,7 +413,6 @@ export default function EventsMap() {
     [],
   );
 
-  // Асинхронная загрузка данных после первого отображения.
   useEffect(() => {
     let active = true;
 
@@ -420,39 +455,52 @@ export default function EventsMap() {
     };
   }, []);
 
-  // Восстанавливаем ID профиля из localStorage.
   useEffect(() => {
     let active = true;
 
-    const restoreUser = async () => {
-      let storedUserId: string | null = null;
-
+    const restoreData = async () => {
       try {
-        storedUserId = localStorage.getItem("userId");
+        const userId = localStorage.getItem("userId");
+        const savedIds = localStorage.getItem("joinedEventIds");
+
+        if (!active) return;
+
+        if (userId) {
+          startTransition(() => {
+            setCurrentUser({
+              id: userId,
+              name: "Ваш профіль",
+              age: 18,
+              telegramUsername: "",
+            });
+          });
+        }
+
+        if (savedIds) {
+          const parsed: unknown = JSON.parse(savedIds);
+
+          if (Array.isArray(parsed)) {
+            startTransition(() => {
+              setJoinedEventIds(
+                parsed.filter(
+                  (id): id is string => typeof id === "string",
+                ),
+              );
+            });
+          }
+        }
       } catch {
-        return;
+        // localStorage може бути недоступним або містити некоректні дані.
       }
-
-      if (!active || !storedUserId) return;
-
-      startTransition(() => {
-        setCurrentUser({
-          id: storedUserId as string,
-          name: "Ваш профіль",
-          age: 18,
-          telegramUsername: "",
-        });
-      });
     };
 
-    void restoreUser();
+    void restoreData();
 
     return () => {
       active = false;
     };
   }, []);
 
-  // Загружаем события, когда пользователь выбрал площадку.
   useEffect(() => {
     if (!selectedLocationId) return;
 
@@ -469,25 +517,58 @@ export default function EventsMap() {
           `${API_URL}/api/locations/${locationId}/events`,
         );
 
-        if (!active) return;
-
-        const data = Array.isArray(response.data)
-          ? response.data.map((event) => ({
-            ...event,
-            locationId: event.locationId || locationId,
-            participantsCount:
-              Number(event.participantsCount) || 0,
-            maxParticipants:
-              Number(event.maxParticipants) || 0,
-          }))
+        const list = Array.isArray(response.data)
+          ? response.data
           : [];
+
+        const enrichedEvents = await Promise.all(
+          list.map(async (event) => {
+            try {
+              const detailResponse = await axios.get<SportEvent>(
+                `${API_URL}/api/events/${event.id}`,
+              );
+
+              const details = detailResponse.data;
+
+              return {
+                ...event,
+                ...details,
+                locationId:
+                  details.locationId ||
+                  event.locationId ||
+                  locationId,
+                participantsCount:
+                  Number(
+                    details.participantsCount ??
+                    event.participantsCount,
+                  ) || 0,
+                maxParticipants:
+                  Number(
+                    details.maxParticipants ??
+                    event.maxParticipants,
+                  ) || 0,
+              };
+            } catch {
+              return {
+                ...event,
+                locationId: event.locationId || locationId,
+                participantsCount:
+                  Number(event.participantsCount) || 0,
+                maxParticipants:
+                  Number(event.maxParticipants) || 0,
+              };
+            }
+          }),
+        );
+
+        if (!active) return;
 
         startTransition(() => {
           setEvents((previous) => [
             ...previous.filter(
               (event) => event.locationId !== locationId,
             ),
-            ...data,
+            ...enrichedEvents,
           ]);
           setError("");
           setIsLoadingEvents(false);
@@ -592,22 +673,20 @@ export default function EventsMap() {
     setNotice("");
 
     try {
-      const payload = {
-        name: locationForm.name.trim(),
-        address: locationForm.address.trim(),
-        latitude,
-        longitude,
-        openingTime: locationForm.openingTime,
-        closingTime: locationForm.closingTime,
-        entryFee,
-        contactInfo: locationForm.contactInfo.trim(),
-        creatorId: currentUser.id,
-        sportType: locationForm.sportType,
-      };
-
       const response = await axios.post<SportLocation>(
         `${API_URL}/api/locations`,
-        payload,
+        {
+          name: locationForm.name.trim(),
+          address: locationForm.address.trim(),
+          latitude,
+          longitude,
+          openingTime: locationForm.openingTime,
+          closingTime: locationForm.closingTime,
+          entryFee,
+          contactInfo: locationForm.contactInfo.trim(),
+          creatorId: currentUser.id,
+          sportType: locationForm.sportType,
+        },
       );
 
       const createdLocation = response.data;
@@ -644,11 +723,9 @@ export default function EventsMap() {
       return;
     }
 
-    const times = getInitialEventTimes();
-
     setEventForm({
       ...EMPTY_EVENT_FORM,
-      ...times,
+      ...getInitialEventTimes(),
       sportType: selectedLocation?.sportType || "FOOTBALL",
     });
 
@@ -721,9 +798,7 @@ export default function EventsMap() {
       });
 
       setIsCreatingEvent(false);
-
       await loadLocationEvents(selectedLocation.id);
-
       setNotice("Подію створено.");
     } catch (requestError) {
       setError(getErrorMessage(requestError));
@@ -745,6 +820,10 @@ export default function EventsMap() {
       return;
     }
 
+    const telegramUsername = userForm.telegramUsername
+      .trim()
+      .replace(/^@/, "");
+
     setIsSaving(true);
     setError("");
 
@@ -754,7 +833,7 @@ export default function EventsMap() {
         {
           name: userForm.name.trim(),
           age,
-          telegramUsername: userForm.telegramUsername.trim(),
+          telegramUsername,
         },
       );
 
@@ -783,6 +862,11 @@ export default function EventsMap() {
       return;
     }
 
+    if (joinedEventIds.includes(event.id)) {
+      setNotice("Ви вже приєдналися до цієї події.");
+      return;
+    }
+
     if (event.participantsCount >= event.maxParticipants) {
       setError("У цій події вже немає вільних місць.");
       return;
@@ -797,6 +881,17 @@ export default function EventsMap() {
         `${API_URL}/api/events/${event.id}/participants`,
         { userId: currentUser.id },
       );
+
+      const nextIds = Array.from(
+        new Set([...joinedEventIds, event.id]),
+      );
+
+      localStorage.setItem(
+        "joinedEventIds",
+        JSON.stringify(nextIds),
+      );
+
+      setJoinedEventIds(nextIds);
 
       await loadLocationEvents(event.locationId);
       setNotice("Ви приєдналися до події.");
@@ -813,6 +908,11 @@ export default function EventsMap() {
       return;
     }
 
+    if (!joinedEventIds.includes(event.id)) {
+      setNotice("Ви не позначені як учасник цієї події.");
+      return;
+    }
+
     setIsSaving(true);
     setError("");
     setNotice("");
@@ -821,6 +921,17 @@ export default function EventsMap() {
       await axios.delete(
         `${API_URL}/api/events/${event.id}/participants/${currentUser.id}`,
       );
+
+      const nextIds = joinedEventIds.filter(
+        (id) => id !== event.id,
+      );
+
+      localStorage.setItem(
+        "joinedEventIds",
+        JSON.stringify(nextIds),
+      );
+
+      setJoinedEventIds(nextIds);
 
       await loadLocationEvents(event.locationId);
       setNotice("Ви залишили подію.");
@@ -883,63 +994,6 @@ export default function EventsMap() {
               </AdvancedMarker>
             );
           })}
-
-          {selectedLocation &&
-            isValidCoordinate(
-              selectedLocation.latitude,
-              selectedLocation.longitude,
-            ) && (
-              <InfoWindow
-                position={{
-                  lat: selectedLocation.latitude,
-                  lng: selectedLocation.longitude,
-                }}
-                onCloseClick={closePanels}
-                minWidth={260}
-              >
-                <div className="space-y-2 p-1 text-foreground">
-                  <h3 className="text-base font-semibold">
-                    {selectedLocation.name}
-                  </h3>
-
-                  <p className="text-sm text-muted-foreground">
-                    {selectedLocation.address || "Адресу не вказано"}
-                  </p>
-
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="secondary">
-                      <Clock className="mr-1 size-3" />
-                      {selectedLocation.openingTime || "--:--"}–
-                      {selectedLocation.closingTime || "--:--"}
-                    </Badge>
-
-                    <Badge variant="secondary">
-                      <Wallet className="mr-1 size-3" />
-                      {Number(selectedLocation.entryFee) === 0
-                        ? "Безкоштовно"
-                        : `${selectedLocation.entryFee} грн`}
-                    </Badge>
-                  </div>
-
-                  <p className="text-xs text-muted-foreground">
-                    {getSportLabel(selectedLocation.sportType)}
-                  </p>
-
-                  <Button
-                    className="w-full"
-                    size="sm"
-                    onClick={() => {
-                      setIsCreatingEvent(false);
-                      setError("");
-                      setNotice("");
-                    }}
-                  >
-                    <CalendarDays className="mr-2 size-4" />
-                    Переглянути події
-                  </Button>
-                </div>
-              </InfoWindow>
-            )}
         </Map>
 
         {!selectedLocation &&
@@ -951,19 +1005,12 @@ export default function EventsMap() {
                   Спортивні майданчики
                 </CardTitle>
                 <CardDescription>
-                  Виберіть майданчик на карті або створіть новий.
+                  Виберіть майданчик на карті або створіть профіль.
+                  Щоб додати майданчик, натисніть на карту.
                 </CardDescription>
               </CardHeader>
 
               <CardContent className="space-y-3">
-                <Button
-                  className="w-full"
-                  onClick={handleOpenCreateLocation}
-                >
-                  <Plus className="mr-2 size-4" />
-                  Створити майданчик
-                </Button>
-
                 <Button
                   variant="outline"
                   className="w-full"
@@ -973,7 +1020,7 @@ export default function EventsMap() {
                     setNotice("");
                   }}
                 >
-                  {currentUser ? "Змінити профіль" : "Створити профіль"}
+                  {currentUser ? "Створити інший профіль" : "Створити профіль"}
                 </Button>
 
                 {isLoadingLocations && (
@@ -1064,6 +1111,36 @@ export default function EventsMap() {
                 />
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Широта</Label>
+                  <Input
+                    type="number"
+                    value={locationForm.latitude}
+                    onChange={(event) =>
+                      setLocationForm((form) => ({
+                        ...form,
+                        latitude: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>Довгота</Label>
+                  <Input
+                    type="number"
+                    value={locationForm.longitude}
+                    onChange={(event) =>
+                      setLocationForm((form) => ({
+                        ...form,
+                        longitude: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+
               <div className="space-y-1.5">
                 <Label>Вид спорту</Label>
                 <select
@@ -1130,8 +1207,8 @@ export default function EventsMap() {
               </div>
 
               <div className="space-y-1.5">
-                <Label>Контактна інформація</Label>
-                <Textarea
+                <Label>Telegram для зв’язку</Label>
+                <Input
                   value={locationForm.contactInfo}
                   onChange={(event) =>
                     setLocationForm((form) => ({
@@ -1139,8 +1216,7 @@ export default function EventsMap() {
                       contactInfo: event.target.value,
                     }))
                   }
-                  placeholder="Телефон або Telegram"
-                  rows={2}
+                  placeholder="@username"
                 />
               </div>
 
@@ -1168,7 +1244,7 @@ export default function EventsMap() {
                 <div>
                   <CardTitle>Профіль користувача</CardTitle>
                   <CardDescription>
-                    Профіль потрібен для створення та відвідування подій.
+                    Створіть профіль для участі в подіях.
                   </CardDescription>
                 </div>
                 <Button
@@ -1214,7 +1290,7 @@ export default function EventsMap() {
               </div>
 
               <div className="space-y-1.5">
-                <Label>Telegram username</Label>
+                <Label>Telegram username *</Label>
                 <Input
                   value={userForm.telegramUsername}
                   onChange={(event) =>
@@ -1287,7 +1363,7 @@ export default function EventsMap() {
 
               {selectedLocation.contactInfo && (
                 <p className="text-sm text-muted-foreground">
-                  Контакти: {selectedLocation.contactInfo}
+                  Telegram: {selectedLocation.contactInfo}
                 </p>
               )}
 
@@ -1355,7 +1431,7 @@ export default function EventsMap() {
                     </p>
 
                     <p className="text-sm text-muted-foreground">
-                      Організатор: {event.organizerName || "Невідомий"}
+                      Організатор: {event.organizerName || "Не вказано"}
                       {event.organizerTelegramUsername
                         ? ` · @${event.organizerTelegramUsername.replace(/^@/, "")}`
                         : ""}
@@ -1363,29 +1439,32 @@ export default function EventsMap() {
 
                     {currentUser && (
                       <div className="flex gap-2">
-                        <Button
-                          className="flex-1"
-                          variant="outline"
-                          onClick={() => handleJoinEvent(event)}
-                          disabled={
-                            isSaving ||
-                            event.participantsCount >=
-                            event.maxParticipants
-                          }
-                        >
-                          {event.participantsCount >=
-                            event.maxParticipants
-                            ? "Місць немає"
-                            : "Приєднатися"}
-                        </Button>
-
-                        <Button
-                          variant="outline"
-                          onClick={() => handleLeaveEvent(event)}
-                          disabled={isSaving}
-                        >
-                          Вийти
-                        </Button>
+                        {joinedEventIds.includes(event.id) ? (
+                          <Button
+                            className="flex-1"
+                            variant="outline"
+                            onClick={() => handleLeaveEvent(event)}
+                            disabled={isSaving}
+                          >
+                            Вийти
+                          </Button>
+                        ) : (
+                          <Button
+                            className="flex-1"
+                            variant="outline"
+                            onClick={() => handleJoinEvent(event)}
+                            disabled={
+                              isSaving ||
+                              event.participantsCount >=
+                              event.maxParticipants
+                            }
+                          >
+                            {event.participantsCount >=
+                              event.maxParticipants
+                              ? "Місць немає"
+                              : "Приєднатися"}
+                          </Button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1458,7 +1537,7 @@ export default function EventsMap() {
                     }))
                   }
                 >
-                  {SPORTS.map((sport) => (
+                  {EVENT_SPORTS.map((sport) => (
                     <option key={sport.value} value={sport.value}>
                       {sport.label}
                     </option>

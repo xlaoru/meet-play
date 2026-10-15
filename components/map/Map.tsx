@@ -9,7 +9,7 @@ import axios from "axios";
 import {
   CalendarDays,
   Clock,
-  Flag,
+  MapPin,
   Plus,
   Users,
   Wallet,
@@ -44,6 +44,11 @@ const MAP_ID =
 const DEFAULT_CENTER = {
   lat: 48.4647,
   lng: 35.0462,
+};
+
+type Coordinates = {
+  lat: number;
+  lng: number;
 };
 
 type User = {
@@ -140,6 +145,8 @@ const SPORTS = [
   { value: "FOOTBALL", label: "Футбол" },
   { value: "BASKETBALL", label: "Баскетбол" },
   { value: "VOLLEYBALL", label: "Волейбол" },
+  { value: "TENNIS", label: "Теніс" },
+  { value: "RUNNING", label: "Біг" },
   { value: "OTHER", label: "Інше" },
 ];
 
@@ -174,7 +181,7 @@ function getErrorMessage(error: unknown): string {
 function isValidCoordinate(
   latitude: unknown,
   longitude: unknown,
-): latitude is number {
+): boolean {
   return (
     typeof latitude === "number" &&
     Number.isFinite(latitude) &&
@@ -270,6 +277,9 @@ export default function EventsMap() {
     string | null
   >(null);
 
+  const [clickedPosition, setClickedPosition] =
+    useState<Coordinates | null>(null);
+
   const [locationForm, setLocationForm] =
     useState<LocationForm>(EMPTY_LOCATION_FORM);
 
@@ -282,6 +292,7 @@ export default function EventsMap() {
   const [isCreatingLocation, setIsCreatingLocation] = useState(false);
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [isCreatingUser, setIsCreatingUser] = useState(false);
+  const [isEditingUser, setIsEditingUser] = useState(false);
 
   const [isLoadingLocations, setIsLoadingLocations] = useState(true);
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
@@ -414,187 +425,84 @@ export default function EventsMap() {
   );
 
   useEffect(() => {
-    let active = true;
+    void loadLocations();
+  }, [loadLocations]);
 
-    const run = async () => {
-      try {
-        const response = await axios.get<SportLocation[]>(
-          `${API_URL}/api/locations`,
-        );
-
-        if (!active) return;
-
-        const data = Array.isArray(response.data)
-          ? response.data.filter((location) =>
-            isValidCoordinate(
-              location.latitude,
-              location.longitude,
-            ),
-          )
-          : [];
-
-        startTransition(() => {
-          setLocations(data);
-          setError("");
-          setIsLoadingLocations(false);
-        });
-      } catch (requestError) {
-        if (!active) return;
-
-        startTransition(() => {
-          setError(getErrorMessage(requestError));
-          setIsLoadingLocations(false);
-        });
-      }
-    };
-
-    void run();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
+  // Восстанавливаем профиль пользователя и список событий после перезагрузки.
   useEffect(() => {
-    let active = true;
+    let cancelled = false;
 
     const restoreData = async () => {
       try {
         const userId = localStorage.getItem("userId");
         const savedIds = localStorage.getItem("joinedEventIds");
 
-        if (!active) return;
-
-        if (userId) {
-          startTransition(() => {
-            setCurrentUser({
-              id: userId,
-              name: "Ваш профіль",
-              age: 18,
-              telegramUsername: "",
-            });
-          });
-        }
-
         if (savedIds) {
           const parsed: unknown = JSON.parse(savedIds);
 
-          if (Array.isArray(parsed)) {
-            startTransition(() => {
-              setJoinedEventIds(
-                parsed.filter(
-                  (id): id is string => typeof id === "string",
-                ),
-              );
+          if (Array.isArray(parsed) && !cancelled) {
+            setJoinedEventIds(
+              parsed.filter(
+                (id): id is string => typeof id === "string",
+              ),
+            );
+          }
+        }
+
+        if (!userId) {
+          return;
+        }
+
+        try {
+          const response = await axios.get<User>(
+            `${API_URL}/api/users/${userId}`,
+          );
+
+          const user = response.data;
+
+          if (!cancelled && user?.id) {
+            setCurrentUser(user);
+          }
+        } catch (requestError) {
+          // Сохраняем ID, чтобы пользователь мог попробовать
+          // повторно загрузить свой профиль через кнопку редактирования.
+          if (!cancelled) {
+            setCurrentUser({
+              id: userId,
+              name: "",
+              age: 18,
+              telegramUsername: "",
             });
+
+            setError(
+              `Не вдалося завантажити профіль: ${getErrorMessage(requestError)}`,
+            );
           }
         }
       } catch {
-        // localStorage може бути недоступним або містити некоректні дані.
+        // Некорректные данные localStorage не должны ломать карту.
       }
     };
 
     void restoreData();
 
     return () => {
-      active = false;
+      cancelled = true;
     };
   }, []);
 
   useEffect(() => {
     if (!selectedLocationId) return;
 
-    let active = true;
-    const locationId = selectedLocationId;
-
-    const run = async () => {
-      startTransition(() => {
-        setIsLoadingEvents(true);
-      });
-
-      try {
-        const response = await axios.get<SportEvent[]>(
-          `${API_URL}/api/locations/${locationId}/events`,
-        );
-
-        const list = Array.isArray(response.data)
-          ? response.data
-          : [];
-
-        const enrichedEvents = await Promise.all(
-          list.map(async (event) => {
-            try {
-              const detailResponse = await axios.get<SportEvent>(
-                `${API_URL}/api/events/${event.id}`,
-              );
-
-              const details = detailResponse.data;
-
-              return {
-                ...event,
-                ...details,
-                locationId:
-                  details.locationId ||
-                  event.locationId ||
-                  locationId,
-                participantsCount:
-                  Number(
-                    details.participantsCount ??
-                    event.participantsCount,
-                  ) || 0,
-                maxParticipants:
-                  Number(
-                    details.maxParticipants ??
-                    event.maxParticipants,
-                  ) || 0,
-              };
-            } catch {
-              return {
-                ...event,
-                locationId: event.locationId || locationId,
-                participantsCount:
-                  Number(event.participantsCount) || 0,
-                maxParticipants:
-                  Number(event.maxParticipants) || 0,
-              };
-            }
-          }),
-        );
-
-        if (!active) return;
-
-        startTransition(() => {
-          setEvents((previous) => [
-            ...previous.filter(
-              (event) => event.locationId !== locationId,
-            ),
-            ...enrichedEvents,
-          ]);
-          setError("");
-          setIsLoadingEvents(false);
-        });
-      } catch (requestError) {
-        if (!active) return;
-
-        startTransition(() => {
-          setError(getErrorMessage(requestError));
-          setIsLoadingEvents(false);
-        });
-      }
-    };
-
-    void run();
-
-    return () => {
-      active = false;
-    };
-  }, [selectedLocationId]);
+    void loadLocationEvents(selectedLocationId);
+  }, [selectedLocationId, loadLocationEvents]);
 
   const closePanels = () => {
     setSelectedLocationId(null);
     setIsCreatingLocation(false);
     setIsCreatingEvent(false);
     setIsCreatingUser(false);
+    setIsEditingUser(false);
     setError("");
     setNotice("");
   };
@@ -608,9 +516,15 @@ export default function EventsMap() {
 
     if (!coordinates) return;
 
+    setClickedPosition({
+      lat: coordinates.lat,
+      lng: coordinates.lng,
+    });
+
     setSelectedLocationId(null);
     setIsCreatingEvent(false);
     setIsCreatingUser(false);
+    setIsEditingUser(false);
     setError("");
     setNotice("");
 
@@ -623,25 +537,12 @@ export default function EventsMap() {
     setIsCreatingLocation(true);
   };
 
-  const handleOpenCreateLocation = () => {
-    setLocationForm({
-      ...EMPTY_LOCATION_FORM,
-      latitude: String(DEFAULT_CENTER.lat),
-      longitude: String(DEFAULT_CENTER.lng),
-    });
-
-    setSelectedLocationId(null);
-    setIsCreatingEvent(false);
-    setIsCreatingUser(false);
-    setIsCreatingLocation(true);
-    setError("");
-    setNotice("");
-  };
-
   const handleSaveLocation = async () => {
     if (!currentUser) {
       setError("Спочатку створіть профіль користувача.");
       setIsCreatingUser(true);
+      setIsEditingUser(false);
+      setUserForm(EMPTY_USER_FORM);
       return;
     }
 
@@ -707,6 +608,7 @@ export default function EventsMap() {
         await loadLocations();
       }
 
+      setClickedPosition(null);
       setIsCreatingLocation(false);
       setNotice("Спортивний майданчик створено.");
     } catch (requestError) {
@@ -720,6 +622,8 @@ export default function EventsMap() {
     if (!currentUser) {
       setError("Спочатку створіть профіль користувача.");
       setIsCreatingUser(true);
+      setIsEditingUser(false);
+      setUserForm(EMPTY_USER_FORM);
       return;
     }
 
@@ -743,6 +647,8 @@ export default function EventsMap() {
     if (!currentUser) {
       setError("Спочатку створіть профіль користувача.");
       setIsCreatingUser(true);
+      setIsEditingUser(false);
+      setUserForm(EMPTY_USER_FORM);
       return;
     }
 
@@ -807,7 +713,49 @@ export default function EventsMap() {
     }
   };
 
-  const handleCreateUser = async () => {
+  // Открывает форму существующего профиля.
+  const handleOpenEditUser = async () => {
+    if (!currentUser) {
+      setIsEditingUser(false);
+      setUserForm(EMPTY_USER_FORM);
+      setIsCreatingUser(true);
+      return;
+    }
+
+    setIsSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await axios.get<User>(
+        `${API_URL}/api/users/${currentUser.id}`,
+      );
+
+      const user = response.data;
+
+      if (!user?.id) {
+        throw new Error("Не вдалося завантажити профіль користувача.");
+      }
+
+      setCurrentUser(user);
+
+      setUserForm({
+        name: user.name ?? "",
+        age: String(user.age ?? 18),
+        telegramUsername: user.telegramUsername ?? "",
+      });
+
+      setIsEditingUser(true);
+      setIsCreatingUser(true);
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Создаёт профиль, если его нет, или обновляет существующий.
+  const handleSaveUser = async () => {
     const age = Number(userForm.age);
 
     if (!userForm.name.trim()) {
@@ -824,30 +772,61 @@ export default function EventsMap() {
       .trim()
       .replace(/^@/, "");
 
+    if (!telegramUsername) {
+      setError("Вкажіть Telegram username.");
+      return;
+    }
+
+    const payload = {
+      name: userForm.name.trim(),
+      age,
+      telegramUsername,
+    };
+
     setIsSaving(true);
     setError("");
+    setNotice("");
 
     try {
-      const response = await axios.post<User>(
-        `${API_URL}/api/users`,
-        {
-          name: userForm.name.trim(),
-          age,
-          telegramUsername,
-        },
-      );
+      let user: User;
 
-      const user = response.data;
+      if (isEditingUser && currentUser) {
+        const response = await axios.patch<User>(
+          `${API_URL}/api/users/${currentUser.id}`,
+          payload,
+        );
 
-      if (!user?.id) {
-        throw new Error("Сервер не повернув ID користувача.");
+        user = {
+          ...currentUser,
+          ...response.data,
+          ...payload,
+          id: currentUser.id,
+        };
+      } else {
+        const response = await axios.post<User>(
+          `${API_URL}/api/users`,
+          payload,
+        );
+
+        user = response.data;
+
+        if (!user?.id) {
+          throw new Error("Сервер не повернув ID користувача.");
+        }
+
+        localStorage.setItem("userId", user.id);
       }
 
-      localStorage.setItem("userId", user.id);
       setCurrentUser(user);
       setIsCreatingUser(false);
+      setIsEditingUser(false);
       setUserForm(EMPTY_USER_FORM);
-      setNotice("Профіль створено.");
+
+      setNotice(
+        isEditingUser
+          ? "Профіль успішно оновлено."
+          : "Профіль створено.",
+      );
     } catch (requestError) {
       setError(getErrorMessage(requestError));
     } finally {
@@ -859,6 +838,8 @@ export default function EventsMap() {
     if (!currentUser) {
       setError("Спочатку створіть профіль користувача.");
       setIsCreatingUser(true);
+      setIsEditingUser(false);
+      setUserForm(EMPTY_USER_FORM);
       return;
     }
 
@@ -892,7 +873,6 @@ export default function EventsMap() {
       );
 
       setJoinedEventIds(nextIds);
-
       await loadLocationEvents(event.locationId);
       setNotice("Ви приєдналися до події.");
     } catch (requestError) {
@@ -932,7 +912,6 @@ export default function EventsMap() {
       );
 
       setJoinedEventIds(nextIds);
-
       await loadLocationEvents(event.locationId);
       setNotice("Ви залишили подію.");
     } catch (requestError) {
@@ -955,6 +934,7 @@ export default function EventsMap() {
           className="h-full w-full"
           onClick={handleMapClick}
         >
+          {/* Сохранённые площадки */}
           {locations.map((location) => {
             if (
               !isValidCoordinate(
@@ -975,16 +955,18 @@ export default function EventsMap() {
                 title={location.name}
                 onClick={() => {
                   setSelectedLocationId(location.id);
+                  setClickedPosition(null);
                   setIsCreatingLocation(false);
                   setIsCreatingEvent(false);
                   setIsCreatingUser(false);
+                  setIsEditingUser(false);
                   setError("");
                   setNotice("");
                 }}
               >
                 <div className="flex flex-col items-center gap-1">
                   <div className="flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md ring-2 ring-background">
-                    <Flag className="size-5" />
+                    <MapPin className="size-5" />
                   </div>
 
                   <div className="whitespace-nowrap rounded-md border bg-background px-2 py-1 text-xs font-medium shadow-sm">
@@ -994,8 +976,41 @@ export default function EventsMap() {
               </AdvancedMarker>
             );
           })}
+
+          {/* Белый пин для выбранной точки на карте */}
+          {clickedPosition && (
+            <AdvancedMarker
+              position={clickedPosition}
+              zIndex={1000}
+              title="Нове місце"
+            >
+              <svg
+                width="34"
+                height="44"
+                viewBox="0 0 34 44"
+                aria-hidden="true"
+                className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]"
+              >
+                <path
+                  d="M17 1.5C8.44 1.5 1.5 8.44 1.5 17C1.5 28.5 17 42.5 17 42.5S32.5 28.5 32.5 17C32.5 8.44 25.56 1.5 17 1.5Z"
+                  fill="white"
+                  stroke="#333333"
+                  strokeWidth="2"
+                />
+                <circle
+                  cx="17"
+                  cy="17"
+                  r="5.5"
+                  fill="white"
+                  stroke="#333333"
+                  strokeWidth="2"
+                />
+              </svg>
+            </AdvancedMarker>
+          )}
         </Map>
 
+        {/* Главная карточка */}
         {!selectedLocation &&
           !isCreatingLocation &&
           !isCreatingUser && (
@@ -1015,13 +1030,29 @@ export default function EventsMap() {
                   variant="outline"
                   className="w-full"
                   onClick={() => {
+                    if (currentUser) {
+                      void handleOpenEditUser();
+                      return;
+                    }
+
+                    setUserForm(EMPTY_USER_FORM);
+                    setIsEditingUser(false);
                     setIsCreatingUser(true);
                     setError("");
                     setNotice("");
                   }}
+                  disabled={isSaving}
                 >
-                  {currentUser ? "Створити інший профіль" : "Створити профіль"}
+                  {currentUser
+                    ? "Редагувати профіль"
+                    : "Створити профіль"}
                 </Button>
+
+                {currentUser?.name && (
+                  <p className="text-sm text-muted-foreground">
+                    Ви увійшли як {currentUser.name}
+                  </p>
+                )}
 
                 {isLoadingLocations && (
                   <p className="text-sm text-muted-foreground">
@@ -1038,6 +1069,7 @@ export default function EventsMap() {
             </Card>
           )}
 
+        {/* Сообщения */}
         {(error || notice) && (
           <div className="absolute left-3 right-3 top-3 z-40 sm:left-1/2 sm:right-auto sm:w-[420px] sm:-translate-x-1/2">
             <div
@@ -1046,6 +1078,7 @@ export default function EventsMap() {
             >
               <div className="flex items-start justify-between gap-3">
                 <p>{error || notice}</p>
+
                 <button
                   type="button"
                   aria-label="Закрити повідомлення"
@@ -1061,6 +1094,7 @@ export default function EventsMap() {
           </div>
         )}
 
+        {/* Создание площадки */}
         {isCreatingLocation && (
           <Card className="absolute inset-x-3 bottom-3 z-20 max-h-[85%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[380px]">
             <CardHeader>
@@ -1071,10 +1105,15 @@ export default function EventsMap() {
                     Інформація про спортивну локацію.
                   </CardDescription>
                 </div>
+
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={closePanels}
+                  onClick={() => {
+                    setIsCreatingLocation(false);
+                    setClickedPosition(null);
+                    setError("");
+                  }}
                   aria-label="Закрити"
                 >
                   <X className="size-4" />
@@ -1109,36 +1148,6 @@ export default function EventsMap() {
                   }
                   placeholder="Вулиця, парк, район"
                 />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Широта</Label>
-                  <Input
-                    type="number"
-                    value={locationForm.latitude}
-                    onChange={(event) =>
-                      setLocationForm((form) => ({
-                        ...form,
-                        latitude: event.target.value,
-                      }))
-                    }
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label>Довгота</Label>
-                  <Input
-                    type="number"
-                    value={locationForm.longitude}
-                    onChange={(event) =>
-                      setLocationForm((form) => ({
-                        ...form,
-                        longitude: event.target.value,
-                      }))
-                    }
-                  />
-                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -1229,7 +1238,13 @@ export default function EventsMap() {
                   {isSaving ? "Збереження..." : "Створити майданчик"}
                 </Button>
 
-                <Button variant="outline" onClick={closePanels}>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsCreatingLocation(false);
+                    setClickedPosition(null);
+                  }}
+                >
                   Скасувати
                 </Button>
               </div>
@@ -1237,16 +1252,25 @@ export default function EventsMap() {
           </Card>
         )}
 
+        {/* Создание или редактирование профиля */}
         {isCreatingUser && (
           <Card className="absolute inset-x-3 bottom-3 z-20 max-h-[85%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[380px]">
             <CardHeader>
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <CardTitle>Профіль користувача</CardTitle>
+                  <CardTitle>
+                    {isEditingUser
+                      ? "Редагування профілю"
+                      : "Створення профілю"}
+                  </CardTitle>
+
                   <CardDescription>
-                    Створіть профіль для участі в подіях.
+                    {isEditingUser
+                      ? "Оновіть свої особисті дані."
+                      : "Створіть профіль для участі в подіях."}
                   </CardDescription>
                 </div>
+
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1306,10 +1330,14 @@ export default function EventsMap() {
               <div className="flex gap-2">
                 <Button
                   className="flex-1"
-                  onClick={handleCreateUser}
+                  onClick={handleSaveUser}
                   disabled={isSaving}
                 >
-                  {isSaving ? "Збереження..." : "Зберегти профіль"}
+                  {isSaving
+                    ? "Збереження..."
+                    : isEditingUser
+                      ? "Зберегти зміни"
+                      : "Створити профіль"}
                 </Button>
 
                 <Button variant="outline" onClick={closePanels}>
@@ -1320,6 +1348,7 @@ export default function EventsMap() {
           </Card>
         )}
 
+        {/* Информация о площадке и события */}
         {selectedLocation && (
           <Card className="absolute inset-x-3 bottom-3 z-20 max-h-[75%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[420px]">
             <CardHeader>
@@ -1330,6 +1359,7 @@ export default function EventsMap() {
                     {selectedLocation.address || "Адресу не вказано"}
                   </CardDescription>
                 </div>
+
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1474,6 +1504,7 @@ export default function EventsMap() {
           </Card>
         )}
 
+        {/* Создание события */}
         {isCreatingEvent && selectedLocation && (
           <Card className="absolute inset-x-3 bottom-3 z-30 max-h-[85%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:left-4 sm:right-auto sm:w-[380px]">
             <CardHeader>
@@ -1484,6 +1515,7 @@ export default function EventsMap() {
                     Майданчик: {selectedLocation.name}
                   </CardDescription>
                 </div>
+
                 <Button
                   variant="ghost"
                   size="icon"

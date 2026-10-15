@@ -3,7 +3,7 @@
 import {
   APIProvider,
   AdvancedMarker,
-  Map
+  Map,
 } from "@vis.gl/react-google-maps";
 import {
   CalendarDays,
@@ -68,27 +68,29 @@ type SportEvent = {
   createdBy: string;
 };
 
-type LocationForm = {
-  name: string;
-  address: string;
-  openingHours: string;
-  priceType: "free" | "paid";
-  price: string;
-  ownerName: string;
-  phone: string;
-  telegram: string;
-};
+type LocationForm = Pick<
+  SportLocation,
+  | "name"
+  | "address"
+  | "openingHours"
+  | "priceType"
+  | "price"
+  | "ownerName"
+  | "phone"
+  | "telegram"
+>;
 
-type EventForm = {
-  title: string;
-  note: string;
-  date: string;
-  startTime: string;
-  endTime: string;
+type EventForm = Pick<
+  SportEvent,
+  "title" | "note" | "date" | "startTime" | "endTime"
+> & {
   maxParticipants: string;
 };
 
+type PanelMode = "details" | "edit-location" | null;
+
 const CURRENT_USER_ID = "user-illia";
+const MAP_ID = "DEMO_MAP_ID";
 
 const MOCK_USERS: Record<string, string> = {
   "user-illia": "Ілля",
@@ -110,7 +112,7 @@ const INITIAL_LOCATIONS: SportLocation[] = [
     telegram: "@owner",
     lat: 48.4647,
     lng: 35.0462,
-    createdBy: "user-illia",
+    createdBy: CURRENT_USER_ID,
   },
   {
     id: "location-2",
@@ -138,8 +140,12 @@ const INITIAL_EVENTS: SportEvent[] = [
     startTime: "14:00",
     endTime: "15:30",
     maxParticipants: 10,
-    participantIds: ["user-illia", "user-vania", "user-sasha"],
-    createdBy: "user-illia",
+    participantIds: [
+      CURRENT_USER_ID,
+      "user-vania",
+      "user-sasha",
+    ],
+    createdBy: CURRENT_USER_ID,
   },
   {
     id: "event-2",
@@ -175,21 +181,140 @@ const EMPTY_EVENT_FORM: EventForm = {
   maxParticipants: "10",
 };
 
-const MAP_ID = "DEMO_MAP_ID";
+function formatDate(date: string | undefined | null) {
+  if (!date) {
+    return "Дату не вказано";
+  }
 
-function formatDate(date: string) {
-  if (!date) return "";
+  const parsedDate = new Date(`${date}T12:00:00`);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return "Некоректна дата";
+  }
+
   return new Intl.DateTimeFormat("uk-UA", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
-  }).format(new Date(`${date}T12:00:00`));
+  }).format(parsedDate);
+}
+
+function sortEvents(events: SportEvent[]) {
+  return [...events].sort((a, b) =>
+    `${a.date}T${a.startTime}`.localeCompare(
+      `${b.date}T${b.startTime}`,
+    ),
+  );
+}
+
+function LocationFields({
+  form,
+  onChange,
+}: {
+  form: LocationForm;
+  onChange: <K extends keyof LocationForm>(
+    field: K,
+    value: LocationForm[K],
+  ) => void;
+}) {
+  return (
+    <>
+      <div className="space-y-1.5">
+        <Label>Назва майданчика *</Label>
+        <Input
+          value={form.name}
+          onChange={(event) => onChange("name", event.target.value)}
+          placeholder="Наприклад, Резинка"
+          maxLength={100}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Адреса</Label>
+        <Input
+          value={form.address}
+          onChange={(event) => onChange("address", event.target.value)}
+          placeholder="Парк, вулиця, район"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Години роботи</Label>
+        <Input
+          value={form.openingHours}
+          onChange={(event) =>
+            onChange("openingHours", event.target.value)
+          }
+          placeholder="08:00–19:00"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Вартість відвідування</Label>
+        <Select
+          value={form.priceType}
+          onValueChange={(value: "free" | "paid" | null) => {
+            if (value !== null) onChange("priceType", value);
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Оберіть вартість" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="free">Безкоштовно</SelectItem>
+            <SelectItem value="paid">Платно</SelectItem>
+          </SelectContent>
+        </Select>
+
+        {form.priceType === "paid" && (
+          <Input
+            value={form.price}
+            onChange={(event) => onChange("price", event.target.value)}
+            placeholder="Наприклад, 100 грн"
+          />
+        )}
+      </div>
+
+      <Separator />
+
+      <p className="text-sm font-medium">Контакти власника</p>
+
+      <div className="space-y-1.5">
+        <Label>Ім’я або назва</Label>
+        <Input
+          value={form.ownerName}
+          onChange={(event) => onChange("ownerName", event.target.value)}
+          placeholder="Ім’я власника"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Номер телефону</Label>
+        <Input
+          value={form.phone}
+          onChange={(event) => onChange("phone", event.target.value)}
+          placeholder="+380..."
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Telegram</Label>
+        <Input
+          value={form.telegram}
+          onChange={(event) => onChange("telegram", event.target.value)}
+          placeholder="@username"
+        />
+      </div>
+    </>
+  );
 }
 
 export default function EventsMap() {
   const [locations, setLocations] =
     useState<SportLocation[]>(INITIAL_LOCATIONS);
-  const [events, setEvents] = useState<SportEvent[]>(INITIAL_EVENTS);
+  const [events, setEvents] =
+    useState<SportEvent[]>(INITIAL_EVENTS);
+
   const [selectedLocationId, setSelectedLocationId] =
     useState<string | null>(null);
   const [newCoordinates, setNewCoordinates] = useState<{
@@ -203,37 +328,55 @@ export default function EventsMap() {
     useState<EventForm>(EMPTY_EVENT_FORM);
 
   const [isCreatingLocation, setIsCreatingLocation] = useState(false);
-  const [isEditingLocation, setIsEditingLocation] = useState(false);
-  const [isCreatingEvent, setIsCreatingEvent] = useState(false);
+  const [panelMode, setPanelMode] = useState<PanelMode>(null);
   const [isEventFormOpen, setIsEventFormOpen] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
 
   const selectedLocation =
-    locations.find((location) => location.id === selectedLocationId) ?? null;
+    locations.find(({ id }) => id === selectedLocationId) ?? null;
 
   const locationEvents = selectedLocation
-    ? events
-      .filter((event) => event.locationId === selectedLocation.id)
-      .sort((a, b) =>
-        `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`),
-      )
+    ? sortEvents(
+      events.filter(
+        ({ locationId }) => locationId === selectedLocation.id,
+      ),
+    )
     : [];
 
-  const closeLocationPanel = () => {
+  const updateLocationField = <K extends keyof LocationForm>(
+    field: K,
+    value: LocationForm[K],
+  ) => {
+    setLocationForm((form) => ({ ...form, [field]: value }));
+  };
+
+  const updateEventField = <K extends keyof EventForm>(
+    field: K,
+    value: EventForm[K],
+  ) => {
+    setEventForm((form) => ({ ...form, [field]: value }));
+  };
+
+  const closePanel = () => {
     setSelectedLocationId(null);
-    setIsCreatingEvent(false);
+    setPanelMode(null);
     setIsEventFormOpen(false);
     setEditingEventId(null);
-    setIsEditingLocation(false);
   };
 
   const handleMapClick = (lat: number, lng: number) => {
-    setSelectedLocationId(null);
+    closePanel();
     setNewCoordinates({ lat, lng });
     setLocationForm(EMPTY_LOCATION_FORM);
     setIsCreatingLocation(true);
-    setIsEditingLocation(false);
-    setIsCreatingEvent(false);
+  };
+
+  const handleSelectLocation = (location: SportLocation) => {
+    setSelectedLocationId(location.id);
+    setNewCoordinates(null);
+    setIsCreatingLocation(false);
+    setPanelMode("details");
+    setIsEventFormOpen(false);
     setEditingEventId(null);
   };
 
@@ -242,10 +385,10 @@ export default function EventsMap() {
 
     const newLocation: SportLocation = {
       id: crypto.randomUUID(),
+      ...locationForm,
       name: locationForm.name.trim(),
       address: locationForm.address.trim(),
       openingHours: locationForm.openingHours.trim(),
-      priceType: locationForm.priceType,
       price: locationForm.price.trim(),
       ownerName: locationForm.ownerName.trim(),
       phone: locationForm.phone.trim(),
@@ -258,6 +401,7 @@ export default function EventsMap() {
     setSelectedLocationId(newLocation.id);
     setNewCoordinates(null);
     setIsCreatingLocation(false);
+    setPanelMode("details");
   };
 
   const handleUpdateLocation = () => {
@@ -271,6 +415,7 @@ export default function EventsMap() {
             ...locationForm,
             name: locationForm.name.trim(),
             address: locationForm.address.trim(),
+            openingHours: locationForm.openingHours.trim(),
             price: locationForm.price.trim(),
             ownerName: locationForm.ownerName.trim(),
             phone: locationForm.phone.trim(),
@@ -279,28 +424,32 @@ export default function EventsMap() {
           : location,
       ),
     );
-    setIsEditingLocation(false);
+
+    setPanelMode("details");
   };
 
   const handleDeleteLocation = (locationId: string) => {
-    const confirmed = window.confirm(
-      "Видалити майданчик разом з усіма його подіями?",
-    );
-    if (!confirmed) return;
+    if (
+      !window.confirm(
+        "Видалити майданчик разом з усіма його подіями?",
+      )
+    ) {
+      return;
+    }
 
     setLocations((previous) =>
-      previous.filter((location) => location.id !== locationId),
+      previous.filter(({ id }) => id !== locationId),
     );
     setEvents((previous) =>
-      previous.filter((event) => event.locationId !== locationId),
+      previous.filter(({ locationId: id }) => id !== locationId),
     );
-    closeLocationPanel();
+
+    closePanel();
   };
 
   const openCreateEvent = () => {
     setEventForm(EMPTY_EVENT_FORM);
     setEditingEventId(null);
-    setIsCreatingEvent(true);
     setIsEventFormOpen(true);
   };
 
@@ -310,12 +459,16 @@ export default function EventsMap() {
     }
 
     const maxParticipants = Number(eventForm.maxParticipants);
-    if (!Number.isInteger(maxParticipants) || maxParticipants < 1) return;
+
+    if (!Number.isInteger(maxParticipants) || maxParticipants < 1) {
+      return;
+    }
 
     if (editingEventId) {
       setEvents((previous) =>
         previous.map((event) =>
-          event.id === editingEventId && event.createdBy === CURRENT_USER_ID
+          event.id === editingEventId &&
+            event.createdBy === CURRENT_USER_ID
             ? {
               ...event,
               title: eventForm.title.trim(),
@@ -345,10 +498,10 @@ export default function EventsMap() {
       setEvents((previous) => [...previous, newEvent]);
     }
 
-    setIsCreatingEvent(true);
-    setIsEventFormOpen(false);
-    setEditingEventId(null);
     setEventForm(EMPTY_EVENT_FORM);
+    setEditingEventId(null);
+    setIsEventFormOpen(false);
+    setPanelMode("details");
   };
 
   const handleEditEvent = (event: SportEvent) => {
@@ -362,8 +515,8 @@ export default function EventsMap() {
       endTime: event.endTime,
       maxParticipants: String(event.maxParticipants),
     });
+
     setEditingEventId(event.id);
-    setIsCreatingEvent(true);
     setIsEventFormOpen(true);
   };
 
@@ -371,13 +524,16 @@ export default function EventsMap() {
     setEvents((previous) =>
       previous.filter(
         (event) =>
-          event.id !== eventId || event.createdBy !== CURRENT_USER_ID,
+          event.id !== eventId ||
+          event.createdBy !== CURRENT_USER_ID,
       ),
     );
   };
 
   const handleToggleParticipation = (event: SportEvent) => {
-    const isParticipating = event.participantIds.includes(CURRENT_USER_ID);
+    const isParticipating =
+      event.participantIds.includes(CURRENT_USER_ID);
+
     if (
       !isParticipating &&
       event.participantIds.length >= event.maxParticipants
@@ -392,12 +548,33 @@ export default function EventsMap() {
         return {
           ...item,
           participantIds: isParticipating
-            ? item.participantIds.filter((id) => id !== CURRENT_USER_ID)
+            ? item.participantIds.filter(
+              (id) => id !== CURRENT_USER_ID,
+            )
             : [...item.participantIds, CURRENT_USER_ID],
         };
       }),
     );
   };
+
+  const handleEditLocationClick = () => {
+    if (!selectedLocation) return;
+
+    setLocationForm({
+      name: selectedLocation.name,
+      address: selectedLocation.address,
+      openingHours: selectedLocation.openingHours,
+      priceType: selectedLocation.priceType,
+      price: selectedLocation.price,
+      ownerName: selectedLocation.ownerName,
+      phone: selectedLocation.phone,
+      telegram: selectedLocation.telegram,
+    });
+
+    setPanelMode("edit-location");
+  };
+
+  const isEditingLocation = panelMode === "edit-location";
 
   return (
     <APIProvider
@@ -411,6 +588,7 @@ export default function EventsMap() {
           gestureHandling="greedy"
           onClick={(event) => {
             const coordinates = event.detail.latLng;
+
             if (coordinates) {
               handleMapClick(coordinates.lat, coordinates.lng);
             }
@@ -420,22 +598,18 @@ export default function EventsMap() {
           {locations.map((location) => (
             <AdvancedMarker
               key={location.id}
-              position={{ lat: location.lat, lng: location.lng }}
-              title={location.name}
-              onClick={() => {
-                setSelectedLocationId(location.id);
-                setNewCoordinates(null);
-                setIsCreatingLocation(false);
-                setIsCreatingEvent(true);
-                setIsEventFormOpen(false);
-                setIsEditingLocation(false);
-                setEditingEventId(null);
+              position={{
+                lat: location.lat,
+                lng: location.lng,
               }}
+              title={location.name}
+              onClick={() => handleSelectLocation(location)}
             >
               <div className="flex flex-col items-center gap-1">
                 <div className="flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md ring-2 ring-background">
                   <Flag className="size-5" />
                 </div>
+
                 <div className="rounded-md border bg-background px-2 py-1 text-xs font-medium shadow-sm">
                   {location.name}
                 </div>
@@ -444,7 +618,10 @@ export default function EventsMap() {
           ))}
 
           {newCoordinates && (
-            <AdvancedMarker position={newCoordinates} title="Нова локація">
+            <AdvancedMarker
+              position={newCoordinates}
+              title="Нова локація"
+            >
               <div className="flex size-10 items-center justify-center rounded-full border-2 border-primary bg-background text-primary shadow-md">
                 <MapPin className="size-5" />
               </div>
@@ -460,130 +637,12 @@ export default function EventsMap() {
                 Вкажіть дані майданчика. Координати вибрано на карті.
               </CardDescription>
             </CardHeader>
+
             <CardContent className="space-y-4">
-              <div className="space-y-1.5">
-                <Label>Назва майданчика *</Label>
-                <Input
-                  value={locationForm.name}
-                  onChange={(event) =>
-                    setLocationForm((form) => ({
-                      ...form,
-                      name: event.target.value,
-                    }))
-                  }
-                  placeholder="Наприклад, Резинка"
-                  maxLength={100}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Адреса</Label>
-                <Input
-                  value={locationForm.address}
-                  onChange={(event) =>
-                    setLocationForm((form) => ({
-                      ...form,
-                      address: event.target.value,
-                    }))
-                  }
-                  placeholder="Парк, вулиця, район"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Години роботи</Label>
-                <Input
-                  value={locationForm.openingHours}
-                  onChange={(event) =>
-                    setLocationForm((form) => ({
-                      ...form,
-                      openingHours: event.target.value,
-                    }))
-                  }
-                  placeholder="08:00–19:00"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Вартість відвідування</Label>
-                <Select
-                  value={locationForm.priceType}
-                  onValueChange={(value: "free" | "paid" | null) => {
-                    if (value === null) return;
-
-                    setLocationForm((form) => ({
-                      ...form,
-                      priceType: value,
-                    }));
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Оберіть вартість" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="free">Безкоштовно</SelectItem>
-                    <SelectItem value="paid">Платно</SelectItem>
-                  </SelectContent>
-                </Select>
-                {locationForm.priceType === "paid" && (
-                  <Input
-                    value={locationForm.price}
-                    onChange={(event) =>
-                      setLocationForm((form) => ({
-                        ...form,
-                        price: event.target.value,
-                      }))
-                    }
-                    placeholder="Наприклад, 100 грн"
-                  />
-                )}
-              </div>
-
-              <Separator />
-
-              <p className="text-sm font-medium">Контакти власника</p>
-
-              <div className="space-y-1.5">
-                <Label>Ім’я або назва</Label>
-                <Input
-                  value={locationForm.ownerName}
-                  onChange={(event) =>
-                    setLocationForm((form) => ({
-                      ...form,
-                      ownerName: event.target.value,
-                    }))
-                  }
-                  placeholder="Ім’я власника"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Номер телефону</Label>
-                <Input
-                  value={locationForm.phone}
-                  onChange={(event) =>
-                    setLocationForm((form) => ({
-                      ...form,
-                      phone: event.target.value,
-                    }))
-                  }
-                  placeholder="+380..."
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Telegram</Label>
-                <Input
-                  value={locationForm.telegram}
-                  onChange={(event) =>
-                    setLocationForm((form) => ({
-                      ...form,
-                      telegram: event.target.value,
-                    }))
-                  }
-                  placeholder="@username"
-                />
-              </div>
+              <LocationFields
+                form={locationForm}
+                onChange={updateLocationField}
+              />
 
               <div className="flex gap-2">
                 <Button
@@ -593,6 +652,7 @@ export default function EventsMap() {
                 >
                   Створити майданчик
                 </Button>
+
                 <Button
                   variant="outline"
                   onClick={() => {
@@ -607,7 +667,7 @@ export default function EventsMap() {
           </Card>
         )}
 
-        {selectedLocation && (isEditingLocation || isCreatingEvent) && (
+        {selectedLocation && panelMode && (
           <Card className="absolute inset-x-3 bottom-3 z-20 max-h-[90%] overflow-y-auto sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[420px]">
             <CardHeader>
               <div className="flex items-start justify-between gap-3">
@@ -615,24 +675,20 @@ export default function EventsMap() {
                   <CardTitle>
                     {isEditingLocation
                       ? "Редагувати майданчик"
-                      : isCreatingEvent
-                        ? editingEventId
-                          ? "Редагувати гру"
-                          : `Ігри: ${selectedLocation.name}`
+                      : editingEventId
+                        ? "Редагувати гру"
                         : selectedLocation.name}
                   </CardTitle>
+
                   <CardDescription>
                     {selectedLocation.address || "Адресу не вказано"}
                   </CardDescription>
                 </div>
+
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => {
-                    setIsEditingLocation(false);
-                    setIsCreatingEvent(false);
-                    setEditingEventId(null);
-                  }}
+                  onClick={closePanel}
                   aria-label="Закрити"
                 >
                   <X className="size-4" />
@@ -643,115 +699,11 @@ export default function EventsMap() {
             <CardContent className="space-y-4">
               {isEditingLocation ? (
                 <>
-                  <div className="space-y-1.5">
-                    <Label>Назва майданчика *</Label>
-                    <Input
-                      value={locationForm.name}
-                      onChange={(event) =>
-                        setLocationForm((form) => ({
-                          ...form,
-                          name: event.target.value,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Адреса</Label>
-                    <Input
-                      value={locationForm.address}
-                      onChange={(event) =>
-                        setLocationForm((form) => ({
-                          ...form,
-                          address: event.target.value,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Години роботи</Label>
-                    <Input
-                      value={locationForm.openingHours}
-                      onChange={(event) =>
-                        setLocationForm((form) => ({
-                          ...form,
-                          openingHours: event.target.value,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Вартість</Label>
-                    <Select
-                      value={locationForm.priceType}
-                      onValueChange={(value: "free" | "paid" | null) => {
-                        if (value === null) return;
+                  <LocationFields
+                    form={locationForm}
+                    onChange={updateLocationField}
+                  />
 
-                        setLocationForm((form) => ({
-                          ...form,
-                          priceType: value,
-                        }));
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="free">Безкоштовно</SelectItem>
-                        <SelectItem value="paid">Платно</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {locationForm.priceType === "paid" && (
-                      <Input
-                        value={locationForm.price}
-                        onChange={(event) =>
-                          setLocationForm((form) => ({
-                            ...form,
-                            price: event.target.value,
-                          }))
-                        }
-                        placeholder="Наприклад, 100 грн"
-                      />
-                    )}
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Контакт власника</Label>
-                    <Input
-                      value={locationForm.ownerName}
-                      onChange={(event) =>
-                        setLocationForm((form) => ({
-                          ...form,
-                          ownerName: event.target.value,
-                        }))
-                      }
-                      placeholder="Ім’я власника"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Номер телефону</Label>
-                    <Input
-                      value={locationForm.phone}
-                      onChange={(event) =>
-                        setLocationForm((form) => ({
-                          ...form,
-                          phone: event.target.value,
-                        }))
-                      }
-                      placeholder="+380..."
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Telegram</Label>
-                    <Input
-                      value={locationForm.telegram}
-                      onChange={(event) =>
-                        setLocationForm((form) => ({
-                          ...form,
-                          telegram: event.target.value,
-                        }))
-                      }
-                      placeholder="@username"
-                    />
-                  </div>
                   <div className="flex gap-2">
                     <Button
                       className="flex-1"
@@ -760,241 +712,118 @@ export default function EventsMap() {
                     >
                       Зберегти зміни
                     </Button>
+
                     <Button
                       variant="outline"
-                      onClick={() => setIsEditingLocation(false)}
+                      onClick={() => setPanelMode("details")}
                     >
                       Скасувати
                     </Button>
                   </div>
                 </>
-              ) : isCreatingEvent ? (
-                <>
-                  {!isEventFormOpen && (
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium">Заплановані ігри</p>
+              ) : isEventFormOpen ? (
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label>Назва гри *</Label>
+                    <Input
+                      value={eventForm.title}
+                      onChange={(event) =>
+                        updateEventField("title", event.target.value)
+                      }
+                      placeholder="Наприклад, Гра у футбол"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label>Примітка</Label>
+                    <Textarea
+                      value={eventForm.note}
+                      onChange={(event) =>
+                        updateEventField("note", event.target.value)
+                      }
+                      placeholder="Візьміть футбольний м’яч"
+                      rows={2}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label>Дата гри *</Label>
+                    <Input
+                      type="date"
+                      value={eventForm.date}
+                      onChange={(event) =>
+                        updateEventField("date", event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>Початок</Label>
+                      <Input
+                        type="time"
+                        value={eventForm.startTime}
+                        onChange={(event) =>
+                          updateEventField("startTime", event.target.value)
+                        }
+                      />
                     </div>
-                  )}
 
-                  {isEventFormOpen && (
-                    <div className="space-y-3 rounded-lg border p-3">
-                      <div className="space-y-1.5">
-                        <Label>Назва гри *</Label>
-                        <Input
-                          value={eventForm.title}
-                          onChange={(event) =>
-                            setEventForm((form) => ({
-                              ...form,
-                              title: event.target.value,
-                            }))
-                          }
-                          placeholder="Наприклад, Гра у футбол"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label>Примітка</Label>
-                        <Textarea
-                          value={eventForm.note}
-                          onChange={(event) =>
-                            setEventForm((form) => ({
-                              ...form,
-                              note: event.target.value,
-                            }))
-                          }
-                          placeholder="Візьміть футбольний м’яч"
-                          rows={2}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label>Дата гри *</Label>
-                        <Input
-                          type="date"
-                          value={eventForm.date}
-                          onChange={(event) =>
-                            setEventForm((form) => ({
-                              ...form,
-                              date: event.target.value,
-                            }))
-                          }
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1.5">
-                          <Label>Початок</Label>
-                          <Input
-                            type="time"
-                            value={eventForm.startTime}
-                            onChange={(event) =>
-                              setEventForm((form) => ({
-                                ...form,
-                                startTime: event.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label>Завершення</Label>
-                          <Input
-                            type="time"
-                            value={eventForm.endTime}
-                            onChange={(event) =>
-                              setEventForm((form) => ({
-                                ...form,
-                                endTime: event.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label>Максимум учасників</Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={eventForm.maxParticipants}
-                          onChange={(event) =>
-                            setEventForm((form) => ({
-                              ...form,
-                              maxParticipants: event.target.value,
-                            }))
-                          }
-                        />
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          className="flex-1"
-                          onClick={handleSaveEvent}
-                          disabled={
-                            !eventForm.title.trim() ||
-                            !eventForm.date ||
-                            Number(eventForm.maxParticipants) < 1
-                          }
-                        >
-                          {editingEventId ? "Зберегти" : "Створити гру"}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            setIsEventFormOpen(false);
-                            setEditingEventId(null);
-                          }}
-                        >
-                          Скасувати
-                        </Button>
-                      </div>
+                    <div className="space-y-1.5">
+                      <Label>Завершення</Label>
+                      <Input
+                        type="time"
+                        value={eventForm.endTime}
+                        onChange={(event) =>
+                          updateEventField("endTime", event.target.value)
+                        }
+                      />
                     </div>
-                  )}
+                  </div>
 
-                  {!isEventFormOpen && (
-                    <div className="space-y-3">
-                      {locationEvents.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                          На цій локації ще немає запланованих ігор.
-                        </p>
-                      ) : (
-                        locationEvents.map((event) => {
-                          const isParticipating =
-                            event.participantIds.includes(CURRENT_USER_ID);
-                          const isFull =
-                            event.participantIds.length >=
-                            event.maxParticipants;
+                  <div className="space-y-1.5">
+                    <Label>Максимум учасників</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={eventForm.maxParticipants}
+                      onChange={(event) =>
+                        updateEventField(
+                          "maxParticipants",
+                          event.target.value,
+                        )
+                      }
+                    />
+                  </div>
 
-                          return (
-                            <div
-                              key={event.id}
-                              className="space-y-3 rounded-lg border p-3"
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div>
-                                  <h3 className="font-semibold">
-                                    {event.title}
-                                  </h3>
-                                  {event.note && (
-                                    <p className="mt-1 text-sm text-muted-foreground">
-                                      {event.note}
-                                    </p>
-                                  )}
-                                </div>
-                                {event.createdBy === CURRENT_USER_ID && (
-                                  <div className="flex gap-1">
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={() => handleEditEvent(event)}
-                                      aria-label="Редагувати гру"
-                                    >
-                                      <Pencil className="size-4" />
-                                    </Button>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={() =>
-                                        handleDeleteEvent(event.id)
-                                      }
-                                      aria-label="Видалити гру"
-                                    >
-                                      <Trash2 className="size-4" />
-                                    </Button>
-                                  </div>
-                                )}
-                              </div>
+                  <div className="flex gap-2">
+                    <Button
+                      className="flex-1"
+                      onClick={handleSaveEvent}
+                      disabled={
+                        !eventForm.title.trim() ||
+                        !eventForm.date ||
+                        !Number.isInteger(
+                          Number(eventForm.maxParticipants),
+                        ) ||
+                        Number(eventForm.maxParticipants) < 1
+                      }
+                    >
+                      {editingEventId ? "Зберегти" : "Створити гру"}
+                    </Button>
 
-                              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                                <Badge variant="secondary">
-                                  <CalendarDays className="mr-1 size-3" />
-                                  {formatDate(event.date)}
-                                </Badge>
-                                <Badge variant="secondary">
-                                  <Clock className="mr-1 size-3" />
-                                  {event.startTime}–{event.endTime}
-                                </Badge>
-                                <Badge variant="secondary">
-                                  <Users className="mr-1 size-3" />
-                                  {event.participantIds.length}/
-                                  {event.maxParticipants}
-                                </Badge>
-                              </div>
-
-                              <div className="space-y-1">
-                                <p className="text-xs font-medium text-muted-foreground">
-                                  Учасники
-                                </p>
-                                <p className="text-sm">
-                                  {event.participantIds.length
-                                    ? event.participantIds
-                                      .map((id) => MOCK_USERS[id] ?? "Учасник")
-                                      .join(", ")
-                                    : "Поки що ніхто не приєднався"}
-                                </p>
-                              </div>
-
-                              <Button
-                                className="w-full"
-                                variant={
-                                  isParticipating ? "outline" : "default"
-                                }
-                                disabled={!isParticipating && isFull}
-                                onClick={() =>
-                                  handleToggleParticipation(event)
-                                }
-                              >
-                                {isParticipating
-                                  ? "Відмовитися від участі"
-                                  : isFull
-                                    ? "Місць немає"
-                                    : "Приєднатися до гри"}
-                              </Button>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  )}
-                  <Button size="sm" onClick={openCreateEvent}>
-                    <Plus className="mr-1 size-4" />
-                    Нова гра
-                  </Button>
-                </>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setIsEventFormOpen(false);
+                        setEditingEventId(null);
+                        setEventForm(EMPTY_EVENT_FORM);
+                      }}
+                    >
+                      Скасувати
+                    </Button>
+                  </div>
+                </div>
               ) : (
                 <>
                   <div className="space-y-2 text-sm">
@@ -1002,18 +831,22 @@ export default function EventsMap() {
                       <Clock className="size-4 text-muted-foreground" />
                       {selectedLocation.openingHours}
                     </p>
+
                     <p className="flex items-center gap-2">
                       <Wallet className="size-4 text-muted-foreground" />
                       {selectedLocation.priceType === "free"
                         ? "Безкоштовно"
                         : selectedLocation.price || "Платно"}
                     </p>
+
                     {selectedLocation.ownerName && (
                       <p>Власник: {selectedLocation.ownerName}</p>
                     )}
+
                     {selectedLocation.phone && (
                       <p>Телефон: {selectedLocation.phone}</p>
                     )}
+
                     {selectedLocation.telegram && (
                       <p>Telegram: {selectedLocation.telegram}</p>
                     )}
@@ -1021,39 +854,138 @@ export default function EventsMap() {
 
                   <Separator />
 
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      className="flex-1"
-                      onClick={() => {
-                        setIsCreatingEvent(true);
-                        setIsEventFormOpen(false);
-                      }}
-                    >
-                      <CalendarDays className="mr-2 size-4" />
-                      Переглянути ігри
-                    </Button>
-                    {selectedLocation.createdBy === CURRENT_USER_ID && (
-                      <>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="font-semibold">
+                        Заплановані ігри ({locationEvents.length})
+                      </h3>
+
+                      <Button size="sm" onClick={openCreateEvent}>
+                        <Plus className="mr-1 size-4" />
+                        Створити гру
+                      </Button>
+                    </div>
+
+                    {locationEvents.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        На цій локації ще немає запланованих ігор.
+                      </p>
+                    ) : (
+                      locationEvents.map((event) => {
+                        const isParticipating =
+                          event.participantIds.includes(CURRENT_USER_ID);
+                        const isFull =
+                          event.participantIds.length >=
+                          event.maxParticipants;
+
+                        return (
+                          <div
+                            key={event.id}
+                            className="space-y-3 rounded-lg border p-3"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <h4 className="font-semibold">
+                                  {event.title}
+                                </h4>
+
+                                {event.note && (
+                                  <p className="mt-1 text-sm text-muted-foreground">
+                                    {event.note}
+                                  </p>
+                                )}
+                              </div>
+
+                              {event.createdBy === CURRENT_USER_ID && (
+                                <div className="flex gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleEditEvent(event)}
+                                    aria-label="Редагувати гру"
+                                  >
+                                    <Pencil className="size-4" />
+                                  </Button>
+
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() =>
+                                      handleDeleteEvent(event.id)
+                                    }
+                                    aria-label="Видалити гру"
+                                  >
+                                    <Trash2 className="size-4" />
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              <Badge variant="secondary">
+                                <CalendarDays className="mr-1 size-3" />
+                                {formatDate(event.date)}
+                              </Badge>
+
+                              <Badge variant="secondary">
+                                <Clock className="mr-1 size-3" />
+                                {event.startTime}–{event.endTime}
+                              </Badge>
+
+                              <Badge variant="secondary">
+                                <Users className="mr-1 size-3" />
+                                {event.participantIds.length}/
+                                {event.maxParticipants}
+                              </Badge>
+                            </div>
+
+                            <p className="text-sm text-muted-foreground">
+                              Учасники:{" "}
+                              {event.participantIds.length
+                                ? event.participantIds
+                                  .map(
+                                    (id) => MOCK_USERS[id] ?? "Учасник",
+                                  )
+                                  .join(", ")
+                                : "Поки що немає"}
+                            </p>
+
+                            <Button
+                              className="w-full"
+                              variant={
+                                isParticipating ? "outline" : "default"
+                              }
+                              disabled={!isParticipating && isFull}
+                              onClick={() =>
+                                handleToggleParticipation(event)
+                              }
+                            >
+                              {isParticipating
+                                ? "Відмовитися від участі"
+                                : isFull
+                                  ? "Місць немає"
+                                  : "Приєднатися до гри"}
+                            </Button>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {selectedLocation.createdBy === CURRENT_USER_ID && (
+                    <>
+                      <Separator />
+
+                      <div className="flex gap-2">
                         <Button
                           variant="outline"
-                          size="icon"
-                          onClick={() => {
-                            setLocationForm({
-                              name: selectedLocation.name,
-                              address: selectedLocation.address,
-                              openingHours: selectedLocation.openingHours,
-                              priceType: selectedLocation.priceType,
-                              price: selectedLocation.price,
-                              ownerName: selectedLocation.ownerName,
-                              phone: selectedLocation.phone,
-                              telegram: selectedLocation.telegram,
-                            });
-                            setIsEditingLocation(true);
-                          }}
-                          aria-label="Редагувати майданчик"
+                          className="flex-1"
+                          onClick={handleEditLocationClick}
                         >
-                          <Pencil className="size-4" />
+                          <Pencil className="mr-2 size-4" />
+                          Редагувати майданчик
                         </Button>
+
                         <Button
                           variant="destructive"
                           size="icon"
@@ -1064,9 +996,9 @@ export default function EventsMap() {
                         >
                           <Trash2 className="size-4" />
                         </Button>
-                      </>
-                    )}
-                  </div>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </CardContent>
